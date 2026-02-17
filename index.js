@@ -22,7 +22,7 @@ app.get("/", (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 app.post("/run-intelligence", async (req, res) => {
   try {
-    const stages = [
+    const ProspectStage = [
       "Engagement Initiated",
       "Application Pending",
       "Application Completed",
@@ -30,7 +30,7 @@ app.post("/run-intelligence", async (req, res) => {
 
     let allLeads = [];
 
-    for (const stage of stages) {
+    for (const ProspectStage of ProspectStage) {
       const response = await axios.post(
         `${LS_BASE_URL}/v2/LeadManagement.svc/Leads.Get`,
         {
