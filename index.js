@@ -56,7 +56,7 @@ async function updateLead(leadId, anomaly) {
       { Attribute: "mx_AI_Anomaly_Status", Value: "Active" },
       { Attribute: "mx_Latest_Anomaly_Type", Value: anomaly.type },
       { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
-      { Attribute: "mx_Latest_Anomaly_Confidence", Value: "High" },
+      { Attribute: "mx_Latest_Anomaly_Confidence", Value: "90" },
       { Attribute: "mx_Latest_Anomaly_Explanation", Value: anomaly.explanation },
       { Attribute: "mx_Last_Intelligence_Run", Value: new Date().toISOString() }
     ],
