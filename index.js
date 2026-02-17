@@ -51,22 +51,20 @@ function daysBetween(dateString) {
 
 async function updateLead(leadId, anomaly) {
   await axios.post(
-    `${LS_BASE_URL}/LeadManagement.svc/Leads.Update`,
-    {
-      ProspectID: leadId,
-      LeadProperties: [
-        { Attribute: "mx_AI_Anomaly_Status", Value: "Active" },
-        { Attribute: "mx_Latest_Anomaly_Type", Value: anomaly.type },
-        { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
-        { Attribute: "mx_Latest_Anomaly_Confidence", Value: "High" },
-        { Attribute: "mx_Latest_Anomaly_Explanation", Value: anomaly.explanation },
-        { Attribute: "mx_Last_Intelligence_Run", Value: new Date().toISOString() }
-      ]
-    },
+    `${LS_BASE_URL}/LeadManagement.svc/Lead.Update`,
+    [
+      { Attribute: "mx_AI_Anomaly_Status", Value: "Active" },
+      { Attribute: "mx_Latest_Anomaly_Type", Value: anomaly.type },
+      { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
+      { Attribute: "mx_Latest_Anomaly_Confidence", Value: "High" },
+      { Attribute: "mx_Latest_Anomaly_Explanation", Value: anomaly.explanation },
+      { Attribute: "mx_Last_Intelligence_Run", Value: new Date().toISOString() }
+    ],
     {
       params: {
         accessKey: LS_ACCESS_KEY,
-        secretKey: LS_SECRET_KEY
+        secretKey: LS_SECRET_KEY,
+        leadId: leadId
       },
       headers: {
         "Content-Type": "application/json"
