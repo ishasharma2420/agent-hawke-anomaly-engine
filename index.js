@@ -23,16 +23,13 @@ app.post("/run-intelligence", async (req, res) => {
    const response = await axios.post(
   `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
   {
-    Parameter: {
-      ProspectStage: {
-        Values: [
-          "Engagement Initiated",
-          "Application Pending",
-          "Application Completed"
-        ],
-        Operator: "IN"
+    Search: [
+      {
+        Field: "ProspectStage",
+        Condition: "in",
+        Value: "Engagement Initiated,Application Pending,Application Completed"
       }
-    },
+    ],
     Paging: {
       PageIndex: 1,
       PageSize: 50
