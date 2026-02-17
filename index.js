@@ -78,21 +78,39 @@ async function logAIDecision(leadId, anomaly) {
   await axios.post(
     `${LS_BASE_URL}/LeadManagement.svc/Activity.Create`,
     {
-      ProspectID: leadId,
+      RelatedProspectId: leadId,
       ActivityEvent: "AI Decision Event",
-      mx_AI_Anomaly_Type: anomaly.type,
-      mx_AI_Anomaly_Severity: anomaly.severity,
-      mx_AI_Anomaly_Explanation: anomaly.explanation,
-      mx_AI_Agent_Name: "Agent Hawke"
+      ActivityFields: [
+        {
+          SchemaName: "mx_AI_Anomaly_Type",
+          Value: anomaly.type
+        },
+        {
+          SchemaName: "mx_AI_Anomaly_Severity",
+          Value: anomaly.severity
+        },
+        {
+          SchemaName: "mx_AI_Anomaly_Explanation",
+          Value: anomaly.explanation
+        },
+        {
+          SchemaName: "mx_AI_Agent_Name",
+          Value: "Agent Hawke"
+        }
+      ]
     },
     {
       params: {
         accessKey: LS_ACCESS_KEY,
         secretKey: LS_SECRET_KEY
+      },
+      headers: {
+        "Content-Type": "application/json"
       }
     }
   );
 }
+
 
 async function fetchActivities(leadId) {
   const response = await axios.post(
