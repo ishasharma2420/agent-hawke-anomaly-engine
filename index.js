@@ -58,7 +58,7 @@ async function updateLead(leadId, anomaly) {
       { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
       { Attribute: "mx_Latest_Anomaly_Confidence", Value: "90" },
       { Attribute: "mx_Latest_Anomaly_Explanation", Value: anomaly.explanation },
-      { Attribute: "mx_Last_Intelligence_Run", Value: new Date().toISOString() }
+      { Attribute: "mx_Last_Intelligence_Run", Value:  new Date().toISOString().split("T")[0] }
     ],
     {
       params: {
