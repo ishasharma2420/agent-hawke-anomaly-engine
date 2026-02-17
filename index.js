@@ -24,7 +24,7 @@ app.post("/run-intelligence", async (req, res) => {
   `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
   {
     Parameter: {
-      Stage: {
+      ProspectStage: {
         Values: [
           "Engagement Initiated",
           "Application Pending",
