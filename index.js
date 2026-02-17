@@ -54,12 +54,14 @@ async function updateLead(leadId, anomaly) {
     `${LS_BASE_URL}/LeadManagement.svc/Lead.Update`,
     {
       ProspectID: leadId,
-      mx_AI_Anomaly_Status: "Active",
-      mx_Latest_Anomaly_Type: anomaly.type,
-      mx_Latest_Anomaly_Severity: anomaly.severity,
-      mx_Latest_Anomaly_Confidence: "High",
-      mx_Latest_Anomaly_Explanation: anomaly.explanation,
-      mx_Last_Intelligence_Run: new Date()
+      LeadProperties: [
+        { Attribute: "mx_AI_Anomaly_Status", Value: "Active" },
+        { Attribute: "mx_Latest_Anomaly_Type", Value: anomaly.type },
+        { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
+        { Attribute: "mx_Latest_Anomaly_Confidence", Value: "High" },
+        { Attribute: "mx_Latest_Anomaly_Explanation", Value: anomaly.explanation },
+        { Attribute: "mx_Last_Intelligence_Run", Value: new Date().toISOString() }
+      ]
     },
     {
       params: {
