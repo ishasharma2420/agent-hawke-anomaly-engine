@@ -49,8 +49,6 @@ app.post("/run-intelligence", async (req, res) => {
   }
 );
 
-const leads = response.data?.Leads || [];
-
     const leads = response.data?.Leads || [];
 
     console.log(`Fetched ${leads.length} leads`);
