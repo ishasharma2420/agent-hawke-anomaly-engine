@@ -51,7 +51,7 @@ function daysBetween(dateString) {
 
 async function updateLead(leadId, anomaly) {
   await axios.post(
-    `${LS_BASE_URL}/LeadManagement.svc/Lead.Update`,
+    `${LS_BASE_URL}/LeadManagement.svc/Lead.UpdateByProspectId`,
     {
       ProspectID: leadId,
       LeadProperties: [
@@ -116,7 +116,7 @@ app.post("/run-intelligence", async (req, res) => {
     const response = await axios.post(
       `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
       {
-        Paging: { PageIndex: 1, PageSize: 50 }
+        Paging: { PageIndex: 1, PageSize: 100 }
       },
       {
         params: {
