@@ -51,7 +51,7 @@ function daysBetween(dateString) {
 
 async function updateLead(leadId, anomaly) {
   await axios.post(
-    `${LS_BASE_URL}/LeadManagement.svc/Leads.UpdateByProspectId`,
+    `${LS_BASE_URL}/LeadManagement.svc/Leads.Update`,
     {
       ProspectID: leadId,
       LeadProperties: [
@@ -67,10 +67,14 @@ async function updateLead(leadId, anomaly) {
       params: {
         accessKey: LS_ACCESS_KEY,
         secretKey: LS_SECRET_KEY
+      },
+      headers: {
+        "Content-Type": "application/json"
       }
     }
   );
 }
+
 
 async function logAIDecision(leadId, anomaly) {
   await axios.post(
