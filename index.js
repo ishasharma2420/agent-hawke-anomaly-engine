@@ -116,7 +116,7 @@ async function fetchActivities(leadId) {
   const response = await axios.post(
     `${LS_BASE_URL}/LeadManagement.svc/Activities.Get`,
     {
-      ProspectID: leadId,
+      RelatedProspectID: leadId,
       Paging: { PageIndex: 1, PageSize: 20 }
     },
     {
@@ -146,7 +146,7 @@ app.post("/run-intelligence", async (req, res) => {
       }
     );
 
-    const leads = response.data || [];
+    const leads = response.data?.Data || [];
     let anomalyCount = 0;
 
     for (const lead of leads) {
