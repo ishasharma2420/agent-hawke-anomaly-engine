@@ -20,26 +20,36 @@ app.get("/", (req, res) => {
 app.post("/run-intelligence", async (req, res) => {
   try {
 
-    const response = await axios.get(
-      `${LS_BASE_URL}/Leads.svc/Leads`,
-      {
-        params: {
-          accessKey: LS_ACCESS_KEY,
-          secretKey: LS_SECRET_KEY,
-          "search": JSON.stringify({
-            "Stage": {
-              "Values": [
-                "Engagement Initiated",
-                "Application Pending",
-                "Application Completed"
-              ],
-              "Operator": "IN"
-            }
-          }),
-          "pageSize": 50
-        }
+   const response = await axios.post(
+  `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
+  {
+    Parameter: {
+      Stage: {
+        Values: [
+          "Engagement Initiated",
+          "Application Pending",
+          "Application Completed"
+        ],
+        Operator: "IN"
       }
-    );
+    },
+    Paging: {
+      PageIndex: 1,
+      PageSize: 50
+    }
+  },
+  {
+    params: {
+      accessKey: LS_ACCESS_KEY,
+      secretKey: LS_SECRET_KEY
+    },
+    headers: {
+      "Content-Type": "application/json"
+    }
+  }
+);
+
+const leads = response.data?.Leads || [];
 
     const leads = response.data?.Leads || [];
 
