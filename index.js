@@ -18,13 +18,11 @@ app.get("/", (req, res) => {
 
 // ═══════════════════════════════════════════════════════════════════
 // APPROACH A — Query LEADS by ProspectStage (Lead-level stages)
-// Use this if your stages live on the Lead object itself.
 // Endpoint: Search Leads by Criteria
 // ═══════════════════════════════════════════════════════════════════
 app.post("/run-intelligence", async (req, res) => {
   try {
-    // --- Step 1: Fetch leads by stage using Search by Criteria API ---
-    const ProspectStage = [
+    const stages = [
       "Engagement Initiated",
       "Application Pending",
       "Application Completed",
@@ -32,7 +30,6 @@ app.post("/run-intelligence", async (req, res) => {
 
     let allLeads = [];
 
-    // Query each stage individually (Search by Criteria uses single-value lookups)
     for (const stage of stages) {
       const response = await axios.post(
         `${LS_BASE_URL}/v2/LeadManagement.svc/Leads.Get`,
@@ -48,7 +45,7 @@ app.post("/run-intelligence", async (req, res) => {
           },
           Sorting: {
             ColumnName: "ModifiedOn",
-            Direction: "1", // 1 = descending (newest first)
+            Direction: "1",
           },
           Paging: {
             PageIndex: 1,
@@ -68,10 +65,8 @@ app.post("/run-intelligence", async (req, res) => {
 
     console.log(`Total leads fetched: ${allLeads.length}`);
 
-    // --- Step 2: Compute behavioral signals ---
     const enriched = allLeads.map((lead) => {
       const props = {};
-      // Normalize LeadPropertyList into a flat object
       if (lead.LeadPropertyList) {
         lead.LeadPropertyList.forEach((p) => {
           props[p.Attribute] = p.Value;
@@ -89,7 +84,6 @@ app.post("/run-intelligence", async (req, res) => {
       };
     });
 
-    // --- Step 3: Return scan results (LLM + writeback added later) ---
     res.json({
       message: "Hawke scanned pipeline stages",
       scanned: enriched.length,
@@ -106,14 +100,10 @@ app.post("/run-intelligence", async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════════════
 // APPROACH B — Query ACTIVITIES on a custom object (e.g. OT_2)
-// Use this if "Student" is a custom object with its own stages.
 // Endpoint: Activity Advanced Search
 // ═══════════════════════════════════════════════════════════════════
 app.post("/run-intelligence-custom-object", async (req, res) => {
   try {
-    // Replace with your actual Student object event code.
-    // Find it in: LS Admin → Customization → Custom Activities & Scores
-    // Or call: GET /v2/ProspectActivity.svc/ActivityTypes.Get
     const STUDENT_OBJECT_EVENT_CODE = 12002; // ← CHANGE THIS to your OT_2 event code
 
     const response = await axios.post(
@@ -157,8 +147,6 @@ app.post("/run-intelligence-custom-object", async (req, res) => {
     const records = response.data?.List || [];
     console.log(`Custom object records fetched: ${records.length}`);
 
-    // Filter by stage if the stage is stored in a custom field (e.g. mx_Custom_2)
-    // Adjust the field name based on your schema
     const targetStages = [
       "Engagement Initiated",
       "Application Pending",
@@ -166,7 +154,6 @@ app.post("/run-intelligence-custom-object", async (req, res) => {
     ];
 
     const filtered = records.filter((r) => {
-      // Check the field that holds the stage — commonly mx_Custom_2 or Status
       const stage = r.mx_Custom_2 || r.Status || "";
       return targetStages.includes(stage);
     });
@@ -221,7 +208,6 @@ app.post("/write-decision", async (req, res) => {
       return res.status(400).json({ error: "leadId and decision are required" });
     }
 
-    // Replace 230 with your actual "AI Decision Event" activity event code
     const AI_DECISION_EVENT_CODE = 230; // ← CHANGE THIS
 
     const response = await axios.post(
