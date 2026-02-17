@@ -20,14 +20,12 @@ app.get("/", (req, res) => {
 app.post("/run-intelligence", async (req, res) => {
   try {
 
-    console.log("=== RUN INTELLIGENCE START ===");
-
     const response = await axios.post(
       `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
       {
         Paging: {
           PageIndex: 1,
-          PageSize: 5
+          PageSize: 50
         }
       },
       {
@@ -41,36 +39,22 @@ app.post("/run-intelligence", async (req, res) => {
       }
     );
 
-    console.log("=== RAW RESPONSE START ===");
-    console.log(JSON.stringify(response.data, null, 2));
-    console.log("=== RAW RESPONSE END ===");
+    const leads = Array.isArray(response.data)
+      ? response.data
+      : [];
 
-    // Try both possible formats
-    const leadsFromLeadsKey = response.data?.Leads || [];
-    const leadsFromDataKey = response.data?.Data || [];
-
-    console.log("Leads key count:", leadsFromLeadsKey.length);
-    console.log("Data key count:", leadsFromDataKey.length);
-
-    const finalLeads =
-      leadsFromLeadsKey.length > 0
-        ? leadsFromLeadsKey
-        : leadsFromDataKey;
-
-    console.log(`Final extracted leads: ${finalLeads.length}`);
+    console.log(`Fetched ${leads.length} leads`);
 
     res.json({
-  message: "Full LS Response",
-  rawResponse: response.data
-});
-
+      message: "Hawke scanned successfully",
+      scanned: leads.length
+    });
 
   } catch (error) {
-    console.error("ERROR DETAILS:");
-    console.error(error.response?.data || error.message);
+    console.error("ERROR:", error.response?.data || error.message);
 
     res.status(500).json({
-      error: "Debug fetch failed"
+      error: "Lead fetch failed"
     });
   }
 });
