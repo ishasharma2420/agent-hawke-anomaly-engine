@@ -131,7 +131,8 @@ async function fetchStudentsByStage(stage) {
     }
   );
 
-  const rawLeads = response.data?.Leads || [];
+  // API returns a plain array, not { Leads: [...] }
+  const rawLeads = Array.isArray(response.data) ? response.data : (response.data?.Leads || []);
   const allFlattened = rawLeads.map(flattenLead);
 
   // Filter to Students only (LeadType = OT_2)
