@@ -141,7 +141,6 @@ app.post("/run-intelligence", async (req, res) => {
       PageSize: 100
     }
   },
-      },
       {
         params: {
           accessKey: LS_ACCESS_KEY,
