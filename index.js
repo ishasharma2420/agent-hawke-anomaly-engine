@@ -56,7 +56,7 @@ async function updateLead(leadId, anomaly) {
       { Attribute: "mx_AI_Anomaly_Status", Value: "Active" },
       { Attribute: "mx_Latest_Anomaly_Type", Value: anomaly.type },
       { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
-      { Attribute: "mx_Latest_Anomaly_Confidence", Value: "90" },
+      { Attribute: "mx_Latest_Anomaly_Confidence", Value: 90 },
       { Attribute: "mx_Latest_Anomaly_Explanation", Value: anomaly.explanation },
       { Attribute: "mx_Last_Intelligence_Run", Value: new Date().toISOString().split("T")[0] }
     ],
@@ -100,20 +100,23 @@ async function logAIDecision(leadId, anomaly) {
 
 async function fetchActivities(leadId) {
   const response = await axios.post(
-    `${LS_BASE_URL}/LeadManagement.svc/Activities.Get`,
+    `${LS_BASE_URL}/LeadManagement.svc/Activity.Get`,
     {
-      ProspectID: leadId,
-      Paging: { PageIndex: 1, PageSize: 50 }
+      ProspectId: leadId,
+      Paging: { PageIndex: 1, PageSize: 20 }
     },
     {
       params: {
         accessKey: LS_ACCESS_KEY,
         secretKey: LS_SECRET_KEY
+      },
+      headers: {
+        "Content-Type": "application/json"
       }
     }
   );
 
-  return response.data?.Data || [];
+  return response.data?.Activity || [];
 }
 
 app.post("/run-intelligence", async (req, res) => {
@@ -122,7 +125,7 @@ app.post("/run-intelligence", async (req, res) => {
     const response = await axios.post(
       `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
       {
-        Paging: { PageIndex: 1, PageSize: 200 }
+        Paging: { PageIndex: 1, PageSize: 100 }
       },
       {
         params: {
@@ -132,15 +135,15 @@ app.post("/run-intelligence", async (req, res) => {
       }
     );
 
-    const leads = response.data || [];
+    const leads = response.data?.Leads || response.data?.Data || [];
     let anomalyCount = 0;
 
     for (const lead of leads) {
 
-      const stage = (lead.ProspectStage || "").toLowerCase().trim();
+      const stage = lead.ProspectStage?.trim();
       const stageEntered = lead.mx_Stage_Entered_On;
       const offerDate = lead.mx_Offer_Given_Date;
-      const source = lead.Source;
+      const source = lead.Source?.trim();
       const leadId = lead.ProspectID;
 
       const daysInStage = daysBetween(stageEntered);
@@ -148,8 +151,7 @@ app.post("/run-intelligence", async (req, res) => {
 
       let anomaly = null;
 
-      // 1️⃣ Offer Stalled
-      if (offerDate && stage !== "enrolled" && offerAge > 14) {
+      if (offerDate && stage !== "Enrolled" && offerAge > 14) {
         anomaly = {
           type: "Offer Stalled",
           severity: "High",
@@ -157,60 +159,45 @@ app.post("/run-intelligence", async (req, res) => {
         };
       }
 
-      // 2️⃣ Application Completed – No Counselor Follow-up
-      if (!anomaly && stage === "application completed" && daysInStage > 5) {
-
+      if (!anomaly && stage === "Application Completed" && daysInStage > 5) {
         const activities = await fetchActivities(leadId);
+        const counselorActivity = activities.some(a =>
+          COUNSELOR_KEYWORDS.includes(a.ActivityEvent)
+        );
 
-        const recentCounselorActivity = activities.some(a => {
-          const daysOld = daysBetween(a.ActivityDate);
-          return (
-            COUNSELOR_KEYWORDS.includes(a.ActivityEvent) &&
-            daysOld <= 5
-          );
-        });
-
-        if (!recentCounselorActivity) {
+        if (!counselorActivity) {
           anomaly = {
             type: "Application Completed – No Counselor Follow-up",
             severity: "High",
-            explanation: `No counselor activity within 5 days of application completion.`
+            explanation: `No counselor activity ${daysInStage} days after completion.`
           };
         }
       }
 
-      // 3️⃣ Application Pending – Stalled
-      if (!anomaly && stage === "application pending" && daysInStage > 7) {
-
+      if (!anomaly && stage === "Application Pending" && daysInStage > 7) {
         const activities = await fetchActivities(leadId);
+        const engaged = activities.some(a =>
+          ENGAGEMENT_KEYWORDS.includes(a.ActivityEvent)
+        );
 
-        const recentEngagement = activities.some(a => {
-          const daysOld = daysBetween(a.ActivityDate);
-          return (
-            ENGAGEMENT_KEYWORDS.includes(a.ActivityEvent) &&
-            daysOld <= 7
-          );
-        });
-
-        if (!recentEngagement) {
+        if (!engaged) {
           anomaly = {
             type: "Application Pending – Stalled",
             severity: "Medium",
-            explanation: `No engagement activity within 7 days in Application Pending.`
+            explanation: `No engagement activity ${daysInStage} days in pending stage.`
           };
         }
       }
 
-      // 4️⃣ High Intent – No Movement
       if (!anomaly &&
-          stage === "engagement initiated" &&
+          stage === "Engagement Initiated" &&
           HIGH_INTENT_SOURCES.includes(source) &&
           daysInStage > 7) {
 
         anomaly = {
           type: "High Intent – No Movement",
           severity: "Medium",
-          explanation: `High intent source but no stage movement for ${daysInStage} days.`
+          explanation: `High intent source but no movement for ${daysInStage} days.`
         };
       }
 
@@ -228,8 +215,7 @@ app.post("/run-intelligence", async (req, res) => {
 
   } catch (error) {
     console.error("URL FAILED:", error.config?.url);
-console.error("ERROR:", error.response?.data || error.message);
-
+    console.error("ERROR:", error.response?.data || error.message);
     res.status(500).json({ error: "Hawke scan failed" });
   }
 });
