@@ -90,21 +90,19 @@ async function fetchLeads() {
 
 async function fetchActivities(leadId) {
   const response = await axios.post(
-    `${LS_BASE_URL}/LeadManagement.svc/Activities.Get`,
-    {
-      ProspectID: leadId,
-      Paging: { PageIndex: 1, PageSize: 50 }
-    },
-    {
-      params: {
-        accessKey: LS_ACCESS_KEY,
-        secretKey: LS_SECRET_KEY
-      }
+  `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
+  {
+    Paging: { PageIndex: 1, PageSize: 100 }
+  },
+  {
+    params: {
+      accessKey: LS_ACCESS_KEY,
+      secretKey: LS_SECRET_KEY
     }
-  );
+  }
+);
 
-  return response.data?.Data || [];
-}
+const leads = response.data?.Data || [];
 
 /* ================================
    UPDATE LEAD
