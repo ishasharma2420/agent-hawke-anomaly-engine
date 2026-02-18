@@ -611,32 +611,42 @@ app.post("/run-intelligence", async (req, res) => {
       const sisRecord = sisMap[lead.ProspectID] || null;
       const merged = mergeCRMandSIS(lead, sisRecord);
 
-      // Run CRM rules first (higher priority for existing pipeline issues)
-      let anomaly = await detectCRMAnomalies(merged);
+      const leadBase = {
+        leadId: lead.ProspectID,
+        name: merged.name,
+        email: merged.email,
+        crmStage: merged.crmStage,
+        crmSource: merged.crmSource,
+        daysInStage: merged.daysInStage,
+        hasSIS: merged.hasSIS,
+        enrollmentStatus: merged.enrollmentStatus,
+        academicStanding: merged.academicStanding,
+        tuitionBalance: merged.tuitionBalance,
+      };
 
-      // If no CRM anomaly, check SIS rules
-      if (!anomaly) {
-        anomaly = detectSISAnomalies(merged);
+      // Run BOTH rule sets — a lead can have CRM + SIS anomalies
+      const crmAnomaly = await detectCRMAnomalies(merged);
+      const sisAnomaly = detectSISAnomalies(merged);
+
+      // Pick the highest severity for CRM write-back
+      const primaryAnomaly = sisAnomaly && 
+        (sisAnomaly.severity === "Critical" || 
+         (sisAnomaly.severity === "High" && crmAnomaly?.severity !== "Critical"))
+        ? sisAnomaly : (crmAnomaly || sisAnomaly);
+
+      if (primaryAnomaly) {
+        await updateLead(lead.ProspectID, primaryAnomaly);
+        await logAIDecision(lead.ProspectID, primaryAnomaly);
       }
 
-      if (anomaly) {
-        console.log(`🚨 ${anomaly.source}: ${merged.name} → ${anomaly.type}`);
-        await updateLead(lead.ProspectID, anomaly);
-        await logAIDecision(lead.ProspectID, anomaly);
+      if (crmAnomaly) {
+        console.log(`🚨 CRM: ${merged.name} → ${crmAnomaly.type}`);
+        anomalies.push({ ...leadBase, ...crmAnomaly });
+      }
 
-        anomalies.push({
-          leadId: lead.ProspectID,
-          name: merged.name,
-          email: merged.email,
-          crmStage: merged.crmStage,
-          crmSource: merged.crmSource,
-          daysInStage: merged.daysInStage,
-          hasSIS: merged.hasSIS,
-          enrollmentStatus: merged.enrollmentStatus,
-          academicStanding: merged.academicStanding,
-          tuitionBalance: merged.tuitionBalance,
-          ...anomaly,
-        });
+      if (sisAnomaly) {
+        console.log(`🚨 SIS: ${merged.name} → ${sisAnomaly.type}`);
+        anomalies.push({ ...leadBase, ...sisAnomaly });
       }
     }
 
