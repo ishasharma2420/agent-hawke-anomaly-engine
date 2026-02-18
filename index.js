@@ -149,6 +149,17 @@ app.post("/run-intelligence", async (req, res) => {
       const daysInStage = daysBetween(stageEntered);
       const offerAge = daysBetween(offerDate);
 
+        console.log("---- LEAD DEBUG ----");
+  console.log({
+    leadId,
+    stage,
+    source,
+    stageEntered,
+    daysInStage,
+    offerDate,
+    offerAge
+  });
+
       let anomaly = null;
 
       if (offerDate && stage !== "Enrolled" && offerAge > 14) {
