@@ -134,15 +134,13 @@ app.post("/run-intelligence", async (req, res) => {
   try {
 
     const response = await axios.post(
-      `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
-      {
-        Parameter: {
-          LeadType: "OT_2"
-        },
-        Paging: {
-          PageIndex: 1,
-          PageSize: 100
-        }
+  `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
+  {
+    Paging: {
+      PageIndex: 1,
+      PageSize: 100
+    }
+  },
       },
       {
         params: {
