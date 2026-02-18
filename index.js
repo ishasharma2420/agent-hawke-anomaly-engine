@@ -227,7 +227,9 @@ app.post("/run-intelligence", async (req, res) => {
     });
 
   } catch (error) {
-    console.error(error.response?.data || error.message);
+    console.error("URL FAILED:", error.config?.url);
+console.error("ERROR:", error.response?.data || error.message);
+
     res.status(500).json({ error: "Hawke scan failed" });
   }
 });
