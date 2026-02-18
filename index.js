@@ -7,10 +7,30 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-const { LS_ACCESS_KEY, LS_SECRET_KEY } = process.env;
+// CORS — Allow Custom Menu Web / external UIs to call this
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  if (req.method === "OPTIONS") return res.sendStatus(200);
+  next();
+});
 
-// Strip trailing slash from BASE_URL to prevent double-slash issues
+const { LS_ACCESS_KEY, LS_SECRET_KEY, OPENAI_API_KEY, MAVIS_API_KEY } =
+  process.env;
+
+// Strip trailing slash
 const LS_BASE_URL = (process.env.LS_BASE_URL || "").replace(/\/+$/, "");
+
+// Mavis config
+const MAVIS_BASE_URL =
+  "https://mavis-rest-us11.leadsquared.com/api/db20260218124424340/tab20260218124438825";
+const MAVIS_ORG_CODE = "78807";
+
+// Basic Auth for Mavis (username = accessKey, password = secretKey)
+const MAVIS_BASIC_AUTH = Buffer.from(
+  `${LS_ACCESS_KEY}:${LS_SECRET_KEY}`
+).toString("base64");
 
 /* ================================
    CONFIG
@@ -53,7 +73,6 @@ const ENGAGEMENT_KEYWORDS = [
   "Meeting",
 ];
 
-// AI Decision Event code (from your LS Admin)
 const AI_DECISION_EVENT_CODE = 211;
 
 /* ================================
@@ -67,7 +86,6 @@ function daysBetween(dateString) {
   return Math.floor((today - past) / (1000 * 60 * 60 * 24));
 }
 
-// Normalize LeadPropertyList array into a flat { key: value } object
 function flattenLead(lead) {
   const props = {};
   if (lead.LeadPropertyList) {
@@ -79,11 +97,46 @@ function flattenLead(lead) {
 }
 
 /* ================================
-   FETCH STUDENT LEADS BY STAGE
-   POST /LeadManagement.svc/Leads.Get
-   
-   Queries by ProspectStage, then filters
-   client-side for LeadType = OT_2 (Students only).
+   MAVIS — BULK FETCH ALL SIS ROWS
+================================ */
+
+async function fetchAllSISRecords() {
+  try {
+    const response = await axios.post(
+      `${MAVIS_BASE_URL}/rows/query?orgcode=${MAVIS_ORG_CODE}`,
+      {},
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": MAVIS_API_KEY,
+          Authorization: `Basic ${MAVIS_BASIC_AUTH}`,
+        },
+      }
+    );
+
+    const rows = response.data?.Data || [];
+    console.log(`📊 Mavis: fetched ${rows.length} SIS records`);
+
+    // Build lookup map: prospect_id → SIS record
+    const sisMap = {};
+    for (const row of rows) {
+      if (row.prospect_id) {
+        sisMap[row.prospect_id] = row;
+      }
+    }
+
+    return sisMap;
+  } catch (err) {
+    console.error(
+      "❌ Mavis fetch failed:",
+      err.response?.data || err.message
+    );
+    return {};
+  }
+}
+
+/* ================================
+   CRM — FETCH STUDENT LEADS BY STAGE
 ================================ */
 
 async function fetchStudentsByStage(stage) {
@@ -113,66 +166,47 @@ async function fetchStudentsByStage(stage) {
           "mx_Offer_Given_Date",
         ].join(","),
       },
-      Sorting: {
-        ColumnName: "ModifiedOn",
-        Direction: "1",
-      },
-      Paging: {
-        PageIndex: 1,
-        PageSize: 200,
-      },
+      Sorting: { ColumnName: "ModifiedOn", Direction: "1" },
+      Paging: { PageIndex: 1, PageSize: 200 },
     },
     {
-      params: {
-        accessKey: LS_ACCESS_KEY,
-        secretKey: LS_SECRET_KEY,
-      },
+      params: { accessKey: LS_ACCESS_KEY, secretKey: LS_SECRET_KEY },
       headers: { "Content-Type": "application/json" },
     }
   );
 
-  // API returns a plain array, not { Leads: [...] }
-  const rawLeads = Array.isArray(response.data) ? response.data : (response.data?.Leads || []);
+  const rawLeads = Array.isArray(response.data)
+    ? response.data
+    : response.data?.Leads || [];
   const allFlattened = rawLeads.map(flattenLead);
-
-  // Filter to Students only (LeadType = OT_2)
   const students = allFlattened.filter(
     (l) => l.LeadType === LEAD_TYPE_STUDENT
   );
 
   console.log(
-    `Stage "${stage}": ${rawLeads.length} total leads, ${students.length} students (OT_2)`
+    `Stage "${stage}": ${rawLeads.length} total, ${students.length} students`
   );
-
   return students;
 }
 
 /* ================================
-   FETCH ACTIVITIES FOR A LEAD
-   POST /ProspectActivity.svc/Retrieve?leadId=X
+   CRM — FETCH ACTIVITIES
 ================================ */
 
 async function fetchActivities(leadId) {
   try {
     const response = await axios.post(
       `${LS_BASE_URL}/ProspectActivity.svc/Retrieve`,
-      {
-        Parameter: {},
-        Paging: {
-          Offset: "0",
-          RowCount: "50",
-        },
-      },
+      { Parameter: {}, Paging: { Offset: "0", RowCount: "50" } },
       {
         params: {
           accessKey: LS_ACCESS_KEY,
           secretKey: LS_SECRET_KEY,
-          leadId: leadId,
+          leadId,
         },
         headers: { "Content-Type": "application/json" },
       }
     );
-
     return response.data?.ProspectActivities || [];
   } catch (err) {
     console.error(
@@ -184,8 +218,7 @@ async function fetchActivities(leadId) {
 }
 
 /* ================================
-   UPDATE LEAD FIELDS
-   POST /LeadManagement.svc/Lead.Update?leadId=X
+   CRM — UPDATE LEAD + LOG ACTIVITY
 ================================ */
 
 async function updateLead(leadId, anomaly) {
@@ -196,7 +229,10 @@ async function updateLead(leadId, anomaly) {
         { Attribute: "mx_AI_Anomaly_Status", Value: "Active" },
         { Attribute: "mx_Latest_Anomaly_Type", Value: anomaly.type },
         { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
-        { Attribute: "mx_Latest_Anomaly_Confidence", Value: "90" },
+        {
+          Attribute: "mx_Latest_Anomaly_Confidence",
+          Value: String(anomaly.confidence || 90),
+        },
         {
           Attribute: "mx_Latest_Anomaly_Explanation",
           Value: anomaly.explanation,
@@ -210,7 +246,7 @@ async function updateLead(leadId, anomaly) {
         params: {
           accessKey: LS_ACCESS_KEY,
           secretKey: LS_SECRET_KEY,
-          leadId: leadId,
+          leadId,
         },
         headers: { "Content-Type": "application/json" },
       }
@@ -223,11 +259,6 @@ async function updateLead(leadId, anomaly) {
     );
   }
 }
-
-/* ================================
-   LOG AI DECISION AS ACTIVITY
-   POST /ProspectActivity.svc/Create
-================================ */
 
 async function logAIDecision(leadId, anomaly) {
   try {
@@ -249,10 +280,7 @@ async function logAIDecision(leadId, anomaly) {
         ],
       },
       {
-        params: {
-          accessKey: LS_ACCESS_KEY,
-          secretKey: LS_SECRET_KEY,
-        },
+        params: { accessKey: LS_ACCESS_KEY, secretKey: LS_SECRET_KEY },
         headers: { "Content-Type": "application/json" },
       }
     );
@@ -266,145 +294,385 @@ async function logAIDecision(leadId, anomaly) {
 }
 
 /* ================================
+   MERGE CRM + SIS DATA
+================================ */
+
+function mergeCRMandSIS(lead, sisRecord) {
+  return {
+    prospectId: lead.ProspectID,
+    name: `${lead.FirstName || ""} ${lead.LastName || ""}`.trim(),
+    email: lead.EmailAddress || null,
+    crmStage: (lead.ProspectStage || "").trim(),
+    crmSource: (lead.Source || "").trim(),
+    stageEnteredOn: lead.mx_Stage_Entered_On,
+    offerGivenDate: lead.mx_Offer_Given_Date,
+    daysInStage: daysBetween(lead.mx_Stage_Entered_On),
+    offerAge: daysBetween(lead.mx_Offer_Given_Date),
+
+    // SIS fields
+    hasSIS: !!sisRecord,
+    studentId: sisRecord?.student_id || null,
+    enrollmentStatus: sisRecord?.enrollment_status || null,
+    admitTerm: sisRecord?.admit_term || null,
+    currentTerm: sisRecord?.current_term || null,
+    academicStanding: sisRecord?.academic_standing || null,
+    creditsEarned: sisRecord?.credits_earned ?? null,
+    expectedGraduation: sisRecord?.expected_graduation_date || null,
+    tuitionBalance: parseFloat(sisRecord?.tuition_balance || 0),
+    financialAidStatus: sisRecord?.financial_aid_status || null,
+    scholarshipAmount: parseFloat(sisRecord?.scholarship_amount || 0),
+    sisLastUpdated: sisRecord?.last_updated_timestamp || null,
+  };
+}
+
+/* ================================
+   CRM ANOMALY RULES (existing 4)
+================================ */
+
+async function detectCRMAnomalies(merged) {
+  const { crmStage, crmSource, daysInStage, offerAge, offerGivenDate } =
+    merged;
+
+  // 1️⃣ OFFER STALLED
+  if (offerGivenDate && crmStage !== "Enrolled" && offerAge > 14) {
+    return {
+      type: "Offer Stalled",
+      severity: "High",
+      confidence: 90,
+      source: "CRM",
+      explanation: `Offer given ${offerAge} days ago but student not enrolled.`,
+    };
+  }
+
+  // 2️⃣ APPLICATION COMPLETED – NO COUNSELOR FOLLOW UP
+  if (crmStage === "Application Completed" && daysInStage > 5) {
+    const activities = await fetchActivities(merged.prospectId);
+    const hasCounselor = activities.some((a) => {
+      const eventName = a.EventName || "";
+      return COUNSELOR_KEYWORDS.some((kw) => eventName.includes(kw));
+    });
+    if (!hasCounselor) {
+      return {
+        type: "Application Completed – No Counselor Follow-up",
+        severity: "High",
+        confidence: 88,
+        source: "CRM",
+        explanation: `No counselor activity ${daysInStage} days after application completion.`,
+      };
+    }
+  }
+
+  // 3️⃣ APPLICATION PENDING – STALLED
+  if (crmStage === "Application Pending" && daysInStage > 7) {
+    const activities = await fetchActivities(merged.prospectId);
+    const hasEngagement = activities.some((a) => {
+      const eventName = a.EventName || "";
+      return ENGAGEMENT_KEYWORDS.some((kw) => eventName.includes(kw));
+    });
+    if (!hasEngagement) {
+      return {
+        type: "Application Pending – Stalled",
+        severity: "Medium",
+        confidence: 85,
+        source: "CRM",
+        explanation: `No engagement activity ${daysInStage} days in Application Pending.`,
+      };
+    }
+  }
+
+  // 4️⃣ HIGH INTENT – NO MOVEMENT
+  if (
+    crmStage === "Engagement Initiated" &&
+    HIGH_INTENT_SOURCES.includes(crmSource) &&
+    daysInStage > 7
+  ) {
+    return {
+      type: "High Intent – No Movement",
+      severity: "Medium",
+      confidence: 82,
+      source: "CRM",
+      explanation: `High intent source but no stage movement for ${daysInStage} days.`,
+    };
+  }
+
+  return null;
+}
+
+/* ================================
+   SIS ANOMALY RULES (new 4)
+================================ */
+
+function detectSISAnomalies(merged) {
+  if (!merged.hasSIS) return null;
+
+  const activeCRMStages = [
+    "Engagement Initiated",
+    "Application Pending",
+    "Application Completed",
+    "Enrolled",
+  ];
+
+  // 5️⃣ ENROLLMENT STATUS MISMATCH — Withdrawn
+  if (
+    merged.enrollmentStatus === "Withdrawn" &&
+    activeCRMStages.includes(merged.crmStage)
+  ) {
+    return {
+      type: "Enrollment Status Mismatch",
+      severity: "Critical",
+      confidence: 95,
+      source: "SIS",
+      explanation: `SIS shows Withdrawn but CRM stage is "${merged.crmStage}". Immediate CRM update needed.`,
+    };
+  }
+
+  // 6️⃣ ENROLLMENT STATUS MISMATCH — Admitted but CRM not advanced
+  if (
+    merged.studentId &&
+    (merged.enrollmentStatus === "Active" ||
+      merged.enrollmentStatus === "Admitted") &&
+    merged.crmStage === "Application Completed"
+  ) {
+    return {
+      type: "Enrollment Status Mismatch – Admitted",
+      severity: "High",
+      confidence: 92,
+      source: "SIS",
+      explanation: `SIS has student ID ${merged.studentId} and status "${merged.enrollmentStatus}" but CRM is still at Application Completed.`,
+    };
+  }
+
+  // 7️⃣ HIGH TUITION BALANCE
+  if (
+    (merged.enrollmentStatus === "Enrolled" ||
+      merged.enrollmentStatus === "Active") &&
+    merged.tuitionBalance > 3000
+  ) {
+    const aidContext =
+      merged.financialAidStatus === "Denied"
+        ? "Critical"
+        : merged.tuitionBalance > 5000
+          ? "High"
+          : "Medium";
+    return {
+      type: "High Tuition Balance",
+      severity: aidContext,
+      confidence: 88,
+      source: "SIS",
+      explanation: `$${merged.tuitionBalance.toFixed(2)} balance. Aid status: ${merged.financialAidStatus}. Scholarship: $${merged.scholarshipAmount.toFixed(2)}.`,
+    };
+  }
+
+  // 8️⃣ ACADEMIC PROBATION
+  if (
+    merged.academicStanding === "Probation" ||
+    merged.academicStanding === "Suspension"
+  ) {
+    return {
+      type: `Academic ${merged.academicStanding}`,
+      severity: merged.academicStanding === "Suspension" ? "Critical" : "High",
+      confidence: 85,
+      source: "SIS",
+      explanation: `Student on ${merged.academicStanding} with ${merged.creditsEarned} credits earned.`,
+    };
+  }
+
+  // 9️⃣ ZERO PROGRESS
+  if (
+    merged.enrollmentStatus === "Enrolled" &&
+    merged.creditsEarned === 0 &&
+    merged.currentTerm
+  ) {
+    return {
+      type: "Zero Progress – Active Student",
+      severity: "High",
+      confidence: 87,
+      source: "SIS",
+      explanation: `Enrolled for ${merged.currentTerm} but 0 credits earned. May have stopped attending.`,
+    };
+  }
+
+  return null;
+}
+
+/* ================================
+   OPENAI — ROOT CAUSE ANALYSIS
+================================ */
+
+async function analyzeWithOpenAI(anomalies, summary) {
+  if (!OPENAI_API_KEY || anomalies.length === 0) return null;
+
+  const prompt = `You are Agent Hawke, an AI anomaly detection system for a university admissions CRM.
+
+Here is today's scan summary:
+- Total students scanned: ${summary.totalScanned}
+- Total anomalies detected: ${anomalies.length}
+- Critical: ${anomalies.filter((a) => a.severity === "Critical").length}
+- High: ${anomalies.filter((a) => a.severity === "High").length}
+- Medium: ${anomalies.filter((a) => a.severity === "Medium").length}
+
+Anomalies detected:
+${anomalies
+  .map(
+    (a, i) =>
+      `${i + 1}. [${a.severity}] ${a.type} — ${a.name} (${a.crmStage}): ${a.explanation}`
+  )
+  .join("\n")}
+
+Respond ONLY with valid JSON (no markdown, no backticks). Use this exact structure:
+{
+  "rootCauses": [
+    {
+      "cause": "Short description",
+      "confidence": 78,
+      "category": "Primary driver | Contributing factor | Minor factor",
+      "affectedCount": 3
+    }
+  ],
+  "recommendations": [
+    {
+      "action": "What to do",
+      "impact": "Expected outcome",
+      "priority": "Immediate | This week | This month",
+      "effort": "Low | Medium | High"
+    }
+  ],
+  "riskSummary": "One paragraph executive summary of the overall risk posture"
+}`;
+
+  try {
+    const response = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o-mini",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+        max_tokens: 1500,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const text = response.data.choices?.[0]?.message?.content || "";
+    const cleaned = text.replace(/```json|```/g, "").trim();
+    return JSON.parse(cleaned);
+  } catch (err) {
+    console.error("❌ OpenAI analysis failed:", err.message);
+    return null;
+  }
+}
+
+/* ================================
    HEALTH CHECK
 ================================ */
 
 app.get("/", (req, res) => {
-  res.send("Agent Hawke is live 🦅");
+  res.send("Agent Hawke v2 is live 🦅 — CRM + SIS + AI");
 });
 
 /* ================================
-   MAIN ENGINE
+   MAIN ENGINE — /run-intelligence
 ================================ */
 
 app.post("/run-intelligence", async (req, res) => {
   try {
-    // --- Step 1: Fetch student leads across target stages ---
-    let allStudents = [];
+    const startTime = Date.now();
 
+    // --- Step 1: Fetch all SIS records from Mavis (bulk) ---
+    console.log("🔄 Step 1: Fetching SIS data from Mavis...");
+    const sisMap = await fetchAllSISRecords();
+
+    // --- Step 2: Fetch student leads from CRM ---
+    console.log("🔄 Step 2: Fetching student leads from CRM...");
+    let allStudents = [];
     for (const stage of TARGET_STAGES) {
       const students = await fetchStudentsByStage(stage);
       allStudents.push(...students);
     }
-
-    console.log(`Total student leads fetched: ${allStudents.length}`);
+    console.log(`Total student leads: ${allStudents.length}`);
 
     if (allStudents.length === 0) {
       return res.json({
-        message: "Hawke scanned — no student leads found in target stages",
+        message: "Hawke scanned — no student leads found",
         total_leads_scanned: 0,
         anomalies_detected: 0,
-        debug: {
-          stages_queried: TARGET_STAGES,
-          lead_type_filter: LEAD_TYPE_STUDENT,
-          base_url_used: LS_BASE_URL,
-        },
       });
     }
 
-    // --- Step 2: Run anomaly detection rules ---
-    let anomalyCount = 0;
+    // --- Step 3: Merge + Detect anomalies ---
+    console.log("🔄 Step 3: Running anomaly detection...");
     const anomalies = [];
 
     for (const lead of allStudents) {
-      const stage = (lead.ProspectStage || "").trim();
-      const source = (lead.Source || "").trim();
-      const stageEntered = lead.mx_Stage_Entered_On;
-      const offerDate = lead.mx_Offer_Given_Date;
-      const leadId = lead.ProspectID;
-      const name = `${lead.FirstName || ""} ${lead.LastName || ""}`.trim();
+      const sisRecord = sisMap[lead.ProspectID] || null;
+      const merged = mergeCRMandSIS(lead, sisRecord);
 
-      const daysInStage = daysBetween(stageEntered);
-      const offerAge = daysBetween(offerDate);
+      // Run CRM rules first (higher priority for existing pipeline issues)
+      let anomaly = await detectCRMAnomalies(merged);
 
-      console.log(
-        `Checking: ${name} (${leadId}) | Stage: ${stage} | Source: ${source} | DaysInStage: ${daysInStage} | OfferAge: ${offerAge}`
-      );
-
-      let anomaly = null;
-
-      /* 1️⃣ OFFER STALLED */
-      if (offerDate && stage !== "Enrolled" && offerAge > 14) {
-        anomaly = {
-          type: "Offer Stalled",
-          severity: "High",
-          explanation: `Offer given ${offerAge} days ago but student not enrolled.`,
-        };
-      }
-
-      /* 2️⃣ APPLICATION COMPLETED – NO COUNSELOR FOLLOW UP */
-      if (!anomaly && stage === "Application Completed" && daysInStage > 5) {
-        const activities = await fetchActivities(leadId);
-
-        const hasCounselor = activities.some((a) => {
-          const eventName = a.EventName || "";
-          return COUNSELOR_KEYWORDS.some((kw) => eventName.includes(kw));
-        });
-
-        if (!hasCounselor) {
-          anomaly = {
-            type: "Application Completed – No Counselor Follow-up",
-            severity: "High",
-            explanation: `No counselor activity ${daysInStage} days after application completion.`,
-          };
-        }
-      }
-
-      /* 3️⃣ APPLICATION PENDING – STALLED */
-      if (!anomaly && stage === "Application Pending" && daysInStage > 7) {
-        const activities = await fetchActivities(leadId);
-
-        const hasEngagement = activities.some((a) => {
-          const eventName = a.EventName || "";
-          return ENGAGEMENT_KEYWORDS.some((kw) => eventName.includes(kw));
-        });
-
-        if (!hasEngagement) {
-          anomaly = {
-            type: "Application Pending – Stalled",
-            severity: "Medium",
-            explanation: `No engagement activity ${daysInStage} days in Application Pending.`,
-          };
-        }
-      }
-
-      /* 4️⃣ HIGH INTENT – NO MOVEMENT */
-      if (
-        !anomaly &&
-        stage === "Engagement Initiated" &&
-        HIGH_INTENT_SOURCES.includes(source) &&
-        daysInStage > 7
-      ) {
-        anomaly = {
-          type: "High Intent – No Movement",
-          severity: "Medium",
-          explanation: `High intent source but no stage movement for ${daysInStage} days.`,
-        };
+      // If no CRM anomaly, check SIS rules
+      if (!anomaly) {
+        anomaly = detectSISAnomalies(merged);
       }
 
       if (anomaly) {
-        console.log(`🚨 Anomaly: ${name} → ${anomaly.type}`);
-        await updateLead(leadId, anomaly);
-        await logAIDecision(leadId, anomaly);
-        anomalyCount++;
+        console.log(`🚨 ${anomaly.source}: ${merged.name} → ${anomaly.type}`);
+        await updateLead(lead.ProspectID, anomaly);
+        await logAIDecision(lead.ProspectID, anomaly);
+
         anomalies.push({
-          leadId,
-          name,
-          email: lead.EmailAddress || null,
-          stage,
-          source,
-          daysInStage,
+          leadId: lead.ProspectID,
+          name: merged.name,
+          email: merged.email,
+          crmStage: merged.crmStage,
+          crmSource: merged.crmSource,
+          daysInStage: merged.daysInStage,
+          hasSIS: merged.hasSIS,
+          enrollmentStatus: merged.enrollmentStatus,
+          academicStanding: merged.academicStanding,
+          tuitionBalance: merged.tuitionBalance,
           ...anomaly,
         });
       }
     }
 
-    res.json({
-      message: "Hawke scanned successfully",
-      total_leads_scanned: allStudents.length,
-      anomalies_detected: anomalyCount,
-      anomalies,
+    // --- Step 4: AI Analysis via OpenAI ---
+    console.log("🔄 Step 4: Running AI root cause analysis...");
+    const aiAnalysis = await analyzeWithOpenAI(anomalies, {
+      totalScanned: allStudents.length,
     });
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`✅ Scan complete in ${elapsed}s`);
+
+    // --- Step 5: Return complete results ---
+    const result = {
+      message: "Hawke scan complete",
+      timestamp: new Date().toISOString(),
+      duration_seconds: parseFloat(elapsed),
+      total_leads_scanned: allStudents.length,
+      sis_records_available: Object.keys(sisMap).length,
+      sis_match_rate: `${((Object.keys(sisMap).length / allStudents.length) * 100).toFixed(0)}%`,
+      anomalies_detected: anomalies.length,
+      by_severity: {
+        critical: anomalies.filter((a) => a.severity === "Critical").length,
+        high: anomalies.filter((a) => a.severity === "High").length,
+        medium: anomalies.filter((a) => a.severity === "Medium").length,
+      },
+      by_source: {
+        crm: anomalies.filter((a) => a.source === "CRM").length,
+        sis: anomalies.filter((a) => a.source === "SIS").length,
+      },
+      anomalies,
+      ai_analysis: aiAnalysis,
+    };
+
+    res.json(result);
+    lastScanResult = result; // Cache for /last-scan endpoint
   } catch (error) {
     console.error("Hawke scan failed:", error.response?.data || error.message);
     res.status(500).json({
@@ -415,12 +683,44 @@ app.post("/run-intelligence", async (req, res) => {
 });
 
 /* ================================
+   LIGHTWEIGHT ENDPOINT — Get last scan results
+   (for the UI to poll without re-running the full scan)
+================================ */
+
+let lastScanResult = null;
+
+app.get("/last-scan", (req, res) => {
+  if (!lastScanResult) {
+    return res.json({ message: "No scan has been run yet. POST /run-intelligence first." });
+  }
+  res.json(lastScanResult);
+});
+
+/* ================================
+   MAVIS DATA ENDPOINT — Raw SIS data
+================================ */
+
+app.get("/sis-data", async (req, res) => {
+  try {
+    const sisMap = await fetchAllSISRecords();
+    res.json({
+      count: Object.keys(sisMap).length,
+      records: Object.values(sisMap),
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to fetch SIS data" });
+  }
+});
+
+/* ================================
    START SERVER
 ================================ */
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
-  console.log(`Agent Hawke running on port ${PORT}`);
+  console.log(`Agent Hawke v2 running on port ${PORT}`);
   console.log(`LS_BASE_URL: ${LS_BASE_URL}`);
-  console.log(`Filtering for LeadType: ${LEAD_TYPE_STUDENT}`);
+  console.log(`Mavis: ${MAVIS_BASE_URL}`);
+  console.log(`OpenAI: ${OPENAI_API_KEY ? "configured" : "NOT SET"}`);
+  console.log(`Mavis API Key: ${MAVIS_API_KEY ? "configured" : "NOT SET"}`);
 });
