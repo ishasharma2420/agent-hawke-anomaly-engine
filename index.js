@@ -58,7 +58,7 @@ async function updateLead(leadId, anomaly) {
       { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
       { Attribute: "mx_Latest_Anomaly_Confidence", Value: "90" },
       { Attribute: "mx_Latest_Anomaly_Explanation", Value: anomaly.explanation },
-      { Attribute: "mx_Last_Intelligence_Run", Value:  new Date().toISOString().split("T")[0] }
+      { Attribute: "mx_Last_Intelligence_Run", Value: new Date().toISOString().split("T")[0] }
     ],
     {
       params: {
@@ -73,7 +73,6 @@ async function updateLead(leadId, anomaly) {
   );
 }
 
-
 async function logAIDecision(leadId, anomaly) {
   await axios.post(
     `${LS_BASE_URL}/LeadManagement.svc/Activity.Create`,
@@ -81,22 +80,10 @@ async function logAIDecision(leadId, anomaly) {
       RelatedProspectId: leadId,
       ActivityEvent: "AI Decision Event",
       ActivityFields: [
-        {
-          SchemaName: "mx_AI_Anomaly_Type",
-          Value: anomaly.type
-        },
-        {
-          SchemaName: "mx_AI_Anomaly_Severity",
-          Value: anomaly.severity
-        },
-        {
-          SchemaName: "mx_AI_Anomaly_Explanation",
-          Value: anomaly.explanation
-        },
-        {
-          SchemaName: "mx_AI_Agent_Name",
-          Value: "Agent Hawke"
-        }
+        { SchemaName: "mx_AI_Anomaly_Type", Value: anomaly.type },
+        { SchemaName: "mx_AI_Anomaly_Severity", Value: anomaly.severity },
+        { SchemaName: "mx_AI_Anomaly_Explanation", Value: anomaly.explanation },
+        { SchemaName: "mx_AI_Agent_Name", Value: "Agent Hawke" }
       ]
     },
     {
@@ -111,13 +98,12 @@ async function logAIDecision(leadId, anomaly) {
   );
 }
 
-
 async function fetchActivities(leadId) {
   const response = await axios.post(
     `${LS_BASE_URL}/LeadManagement.svc/Activities.Get`,
     {
-      RelatedProspectID: leadId,
-      Paging: { PageIndex: 1, PageSize: 20 }
+      ProspectID: leadId,
+      Paging: { PageIndex: 1, PageSize: 50 }
     },
     {
       params: {
@@ -136,7 +122,7 @@ app.post("/run-intelligence", async (req, res) => {
     const response = await axios.post(
       `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
       {
-        Paging: { PageIndex: 1, PageSize: 100 }
+        Paging: { PageIndex: 1, PageSize: 200 }
       },
       {
         params: {
@@ -146,12 +132,12 @@ app.post("/run-intelligence", async (req, res) => {
       }
     );
 
-    const leads = response.data?.Data || [];
+    const leads = response.data || [];
     let anomalyCount = 0;
 
     for (const lead of leads) {
 
-      const stage = lead.ProspectStage;
+      const stage = (lead.ProspectStage || "").toLowerCase().trim();
       const stageEntered = lead.mx_Stage_Entered_On;
       const offerDate = lead.mx_Offer_Given_Date;
       const source = lead.Source;
@@ -163,7 +149,7 @@ app.post("/run-intelligence", async (req, res) => {
       let anomaly = null;
 
       // 1️⃣ Offer Stalled
-      if (offerDate && stage !== "Enrolled" && offerAge > 14) {
+      if (offerDate && stage !== "enrolled" && offerAge > 14) {
         anomaly = {
           type: "Offer Stalled",
           severity: "High",
@@ -171,41 +157,53 @@ app.post("/run-intelligence", async (req, res) => {
         };
       }
 
-      // 2️⃣ Application Completed – No Counselor Activity
-      if (!anomaly && stage === "Application Completed" && daysInStage > 5) {
-        const activities = await fetchActivities(leadId);
-        const counselorActivity = activities.some(a =>
-          COUNSELOR_KEYWORDS.includes(a.ActivityEvent)
-        );
+      // 2️⃣ Application Completed – No Counselor Follow-up
+      if (!anomaly && stage === "application completed" && daysInStage > 5) {
 
-        if (!counselorActivity) {
+        const activities = await fetchActivities(leadId);
+
+        const recentCounselorActivity = activities.some(a => {
+          const daysOld = daysBetween(a.ActivityDate);
+          return (
+            COUNSELOR_KEYWORDS.includes(a.ActivityEvent) &&
+            daysOld <= 5
+          );
+        });
+
+        if (!recentCounselorActivity) {
           anomaly = {
             type: "Application Completed – No Counselor Follow-up",
             severity: "High",
-            explanation: `No counselor activity ${daysInStage} days after application completion.`
+            explanation: `No counselor activity within 5 days of application completion.`
           };
         }
       }
 
       // 3️⃣ Application Pending – Stalled
-      if (!anomaly && stage === "Application Pending" && daysInStage > 7) {
-        const activities = await fetchActivities(leadId);
-        const engaged = activities.some(a =>
-          ENGAGEMENT_KEYWORDS.includes(a.ActivityEvent)
-        );
+      if (!anomaly && stage === "application pending" && daysInStage > 7) {
 
-        if (!engaged) {
+        const activities = await fetchActivities(leadId);
+
+        const recentEngagement = activities.some(a => {
+          const daysOld = daysBetween(a.ActivityDate);
+          return (
+            ENGAGEMENT_KEYWORDS.includes(a.ActivityEvent) &&
+            daysOld <= 7
+          );
+        });
+
+        if (!recentEngagement) {
           anomaly = {
             type: "Application Pending – Stalled",
             severity: "Medium",
-            explanation: `No engagement activity ${daysInStage} days in Application Pending.`
+            explanation: `No engagement activity within 7 days in Application Pending.`
           };
         }
       }
 
       // 4️⃣ High Intent – No Movement
       if (!anomaly &&
-          stage === "Engagement Initiated" &&
+          stage === "engagement initiated" &&
           HIGH_INTENT_SOURCES.includes(source) &&
           daysInStage > 7) {
 
