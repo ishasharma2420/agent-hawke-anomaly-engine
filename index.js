@@ -16,6 +16,11 @@ const LS_BASE_URL = (process.env.LS_BASE_URL || "").replace(/\/+$/, "");
    CONFIG
 ================================ */
 
+// ⚠️ IMPORTANT: Set this to your Student object's event code.
+// Use GET /discover-activity-types to find it.
+// Look for an entry with EventName containing "Student" or similar.
+const STUDENT_OBJECT_EVENT_CODE = 12002; // ← CHANGE THIS
+
 const TARGET_STAGES = [
   "Engagement Initiated",
   "Application Pending",
@@ -62,55 +67,87 @@ function daysBetween(dateString) {
   return Math.floor((today - past) / (1000 * 60 * 60 * 24));
 }
 
-// Normalize LeadPropertyList array into a flat object
-function flattenLead(lead) {
-  const props = {};
-  if (lead.LeadPropertyList) {
-    lead.LeadPropertyList.forEach((p) => {
-      props[p.Attribute] = p.Value;
-    });
-  }
-  return { ...lead, ...props };
-}
-
 /* ================================
-   FETCH LEADS BY STAGE
-   POST /LeadManagement.svc/Leads.Get
+   DISCOVER ACTIVITY TYPES
+   GET /ProspectActivity.svc/ActivityTypes.Get
+   
+   Use this to find your Student object event code.
 ================================ */
 
-async function fetchLeadsByStage(stage) {
+app.get("/discover-activity-types", async (req, res) => {
+  try {
+    const response = await axios.get(
+      `${LS_BASE_URL}/ProspectActivity.svc/ActivityTypes.Get`,
+      {
+        params: {
+          accessKey: LS_ACCESS_KEY,
+          secretKey: LS_SECRET_KEY,
+        },
+      }
+    );
+
+    // Filter to custom activity types (EventType = 2) for easier reading
+    const allTypes = response.data || [];
+    const customTypes = allTypes.filter((t) => t.EventType === 2);
+
+    res.json({
+      message: "Find your Student object event code below",
+      instruction:
+        "Look for the entry that matches your Student/OT_2 object. Copy its EventCode and set STUDENT_OBJECT_EVENT_CODE in index.js.",
+      total_activity_types: allTypes.length,
+      custom_activity_types: customTypes,
+      all_activity_types: allTypes,
+    });
+  } catch (error) {
+    console.error("Failed to fetch activity types:", error.response?.data || error.message);
+    res.status(500).json({ error: "Failed to fetch activity types" });
+  }
+});
+
+/* ================================
+   FETCH STUDENT RECORDS BY STAGE
+   POST /ProspectActivity.svc/Activity/Retrieve/BySearchParameter
+   (Activity Advanced Search)
+================================ */
+
+async function fetchStudentsByStage(stage) {
   const response = await axios.post(
-    `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
+    `${LS_BASE_URL}/ProspectActivity.svc/Activity/Retrieve/BySearchParameter`,
     {
-      Parameter: {
-        LookupName: "ProspectStage",
-        LookupValue: stage,
-        SqlOperator: "=",
-      },
-      Columns: {
-        Include_CSV: [
-          "ProspectID",
-          "FirstName",
-          "LastName",
-          "EmailAddress",
-          "ProspectStage",
-          "Source",
-          "Phone",
-          "CreatedOn",
-          "ModifiedOn",
-          "Score",
-          "EngagementScore",
-          "mx_Stage_Entered_On",
-          "mx_Offer_Given_Date",
-        ].join(","),
-      },
-      Sorting: {
-        ColumnName: "ModifiedOn",
-        Direction: "1",
-      },
+      ActivityEventCode: STUDENT_OBJECT_EVENT_CODE,
+      AdvancedSearch: JSON.stringify({
+        GrpConOp: "And",
+        Conditions: [
+          {
+            Type: "Activity",
+            ConOp: "and",
+            RowCondition: [
+              {
+                SubConOp: "And",
+                LSO: "ActivityEvent",
+                LSO_Type: "PAEvent",
+                Operator: "eq",
+                RSO: String(STUDENT_OBJECT_EVENT_CODE),
+              },
+              {
+                SubConOp: "And",
+                LSO: "Status",
+                LSO_Type: "SearchableDropdown",
+                Operator: "eq",
+                RSO: stage,
+              },
+            ],
+          },
+        ],
+        QueryTimeZone: "",
+      }),
       Paging: {
         PageIndex: 1,
         PageSize: 100,
+      },
+      Sorting: {
+        ColumnName: "CreatedOn",
+        Direction: 1,
       },
     },
     {
@@ -122,8 +159,58 @@ async function fetchLeadsByStage(stage) {
     }
   );
 
-  const rawLeads = response.data?.Leads || [];
-  return rawLeads.map(flattenLead);
+  return response.data?.List || [];
+}
+
+/* ================================
+   FETCH ALL STUDENT RECORDS (no stage filter)
+   Fallback if stage filtering via AdvancedSearch doesn't work
+   for your specific field schema.
+================================ */
+
+async function fetchAllStudents() {
+  const response = await axios.post(
+    `${LS_BASE_URL}/ProspectActivity.svc/Activity/Retrieve/BySearchParameter`,
+    {
+      ActivityEventCode: STUDENT_OBJECT_EVENT_CODE,
+      AdvancedSearch: JSON.stringify({
+        GrpConOp: "And",
+        Conditions: [
+          {
+            Type: "Activity",
+            ConOp: "and",
+            RowCondition: [
+              {
+                SubConOp: "And",
+                LSO: "ActivityEvent",
+                LSO_Type: "PAEvent",
+                Operator: "eq",
+                RSO: String(STUDENT_OBJECT_EVENT_CODE),
+              },
+            ],
+          },
+        ],
+        QueryTimeZone: "",
+      }),
+      Paging: {
+        PageIndex: 1,
+        PageSize: 200,
+      },
+      Sorting: {
+        ColumnName: "CreatedOn",
+        Direction: 1,
+      },
+    },
+    {
+      params: {
+        accessKey: LS_ACCESS_KEY,
+        secretKey: LS_SECRET_KEY,
+      },
+      headers: { "Content-Type": "application/json" },
+    }
+  );
+
+  return response.data?.List || [];
 }
 
 /* ================================
@@ -240,52 +327,89 @@ app.get("/", (req, res) => {
 });
 
 /* ================================
+   RAW FETCH — Debug endpoint to see raw student records
+   Helps identify field names for stage, source, etc.
+================================ */
+
+app.get("/debug-students", async (req, res) => {
+  try {
+    const records = await fetchAllStudents();
+    res.json({
+      message: `Found ${records.length} student records`,
+      instruction:
+        "Look at the field names to identify which mx_Custom_X holds Object Stage, Source, Stage Entered On, Offer Given Date",
+      sample: records.slice(0, 3),
+      total: records.length,
+    });
+  } catch (error) {
+    console.error("Debug fetch failed:", error.response?.data || error.message);
+    res.status(500).json({ error: "Debug fetch failed", details: error.response?.data || error.message });
+  }
+});
+
+/* ================================
    MAIN ENGINE
 ================================ */
 
 app.post("/run-intelligence", async (req, res) => {
   try {
-    // --- Step 1: Fetch all leads across target stages ---
-    let allLeads = [];
+    // --- Step 1: Fetch all student object records ---
+    console.log("Fetching all student records...");
+    const allRecords = await fetchAllStudents();
+    console.log(`Total student records fetched: ${allRecords.length}`);
 
-    for (const stage of TARGET_STAGES) {
-      const leads = await fetchLeadsByStage(stage);
-      console.log(`Stage "${stage}": ${leads.length} leads`);
-      allLeads.push(...leads);
-    }
-
-    console.log(`Total leads fetched: ${allLeads.length}`);
-
-    if (allLeads.length === 0) {
+    if (allRecords.length === 0) {
       return res.json({
-        message: "Hawke scanned — no leads found in target stages",
-        total_leads_scanned: 0,
+        message: "Hawke scanned — no student records found",
+        total_records: 0,
         anomalies_detected: 0,
         debug: {
-          stages_queried: TARGET_STAGES,
-          base_url_used: LS_BASE_URL,
-          endpoint_called: `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
+          event_code_used: STUDENT_OBJECT_EVENT_CODE,
+          base_url: LS_BASE_URL,
+          hint: "Use GET /discover-activity-types to verify your Student object event code",
         },
       });
     }
 
-    // --- Step 2: Run anomaly detection rules ---
+    // --- Step 2: Filter to target stages and run anomaly detection ---
+    // Identify which field holds the Object Stage.
+    // Common patterns: Status, mx_Custom_1, mx_Custom_2, etc.
+    // Use GET /debug-students to check your actual field names.
+    // Below we check multiple possible field names:
+
     let anomalyCount = 0;
     const anomalies = [];
+    let stageFieldName = null;
 
-    for (const lead of allLeads) {
-      const stage = (lead.ProspectStage || "").trim();
-      const source = (lead.Source || "").trim();
-      const stageEntered = lead.mx_Stage_Entered_On;
-      const offerDate = lead.mx_Offer_Given_Date;
-      const leadId = lead.ProspectID;
-      const name = `${lead.FirstName || ""} ${lead.LastName || ""}`.trim();
+    for (const record of allRecords) {
+      // Try to detect the stage field — adjust based on /debug-students output
+      const stage = (
+        record.Status ||
+        record.mx_Custom_1 ||
+        record.mx_Custom_2 ||
+        ""
+      ).trim();
+
+      // Track which field we found the stage in (for logging)
+      if (!stageFieldName && TARGET_STAGES.includes(stage)) {
+        if (record.Status === stage) stageFieldName = "Status";
+        else if (record.mx_Custom_1 === stage) stageFieldName = "mx_Custom_1";
+        else if (record.mx_Custom_2 === stage) stageFieldName = "mx_Custom_2";
+      }
+
+      if (!TARGET_STAGES.includes(stage)) continue;
+
+      const leadId = record.RelatedProspectId;
+      const name = `${record.mx_Custom_3 || record.mx_Custom_1 || ""} ${record.mx_Custom_4 || record.mx_Custom_2 || ""}`.trim() || leadId;
+      const source = record.mx_Custom_5 || record.mx_Custom_6 || "";
+      const stageEntered = record.mx_Custom_7 || record.mx_Custom_8 || record.CreatedOn || "";
+      const offerDate = record.mx_Custom_9 || record.mx_Custom_10 || "";
 
       const daysInStage = daysBetween(stageEntered);
       const offerAge = daysBetween(offerDate);
 
       console.log(
-        `Checking: ${name} (${leadId}) | Stage: ${stage} | Source: ${source} | DaysInStage: ${daysInStage} | OfferAge: ${offerAge}`
+        `Checking: ${name} | Stage: ${stage} | Source: ${source} | DaysInStage: ${daysInStage} | OfferAge: ${offerAge}`
       );
 
       let anomaly = null;
@@ -301,37 +425,39 @@ app.post("/run-intelligence", async (req, res) => {
 
       /* 2️⃣ APPLICATION COMPLETED – NO COUNSELOR FOLLOW UP */
       if (!anomaly && stage === "Application Completed" && daysInStage > 5) {
-        const activities = await fetchActivities(leadId);
+        if (leadId) {
+          const activities = await fetchActivities(leadId);
+          const hasCounselor = activities.some((a) => {
+            const eventName = a.EventName || "";
+            return COUNSELOR_KEYWORDS.some((kw) => eventName.includes(kw));
+          });
 
-        const hasCounselor = activities.some((a) => {
-          const eventName = a.EventName || "";
-          return COUNSELOR_KEYWORDS.some((kw) => eventName.includes(kw));
-        });
-
-        if (!hasCounselor) {
-          anomaly = {
-            type: "Application Completed – No Counselor Follow-up",
-            severity: "High",
-            explanation: `No counselor activity ${daysInStage} days after application completion.`,
-          };
+          if (!hasCounselor) {
+            anomaly = {
+              type: "Application Completed – No Counselor Follow-up",
+              severity: "High",
+              explanation: `No counselor activity ${daysInStage} days after application completion.`,
+            };
+          }
         }
       }
 
       /* 3️⃣ APPLICATION PENDING – STALLED */
       if (!anomaly && stage === "Application Pending" && daysInStage > 7) {
-        const activities = await fetchActivities(leadId);
+        if (leadId) {
+          const activities = await fetchActivities(leadId);
+          const hasEngagement = activities.some((a) => {
+            const eventName = a.EventName || "";
+            return ENGAGEMENT_KEYWORDS.some((kw) => eventName.includes(kw));
+          });
 
-        const hasEngagement = activities.some((a) => {
-          const eventName = a.EventName || "";
-          return ENGAGEMENT_KEYWORDS.some((kw) => eventName.includes(kw));
-        });
-
-        if (!hasEngagement) {
-          anomaly = {
-            type: "Application Pending – Stalled",
-            severity: "Medium",
-            explanation: `No engagement activity ${daysInStage} days in Application Pending.`,
-          };
+          if (!hasEngagement) {
+            anomaly = {
+              type: "Application Pending – Stalled",
+              severity: "Medium",
+              explanation: `No engagement activity ${daysInStage} days in Application Pending.`,
+            };
+          }
         }
       }
 
@@ -349,7 +475,7 @@ app.post("/run-intelligence", async (req, res) => {
         };
       }
 
-      if (anomaly) {
+      if (anomaly && leadId) {
         console.log(`🚨 Anomaly: ${name} → ${anomaly.type}`);
         await updateLead(leadId, anomaly);
         await logAIDecision(leadId, anomaly);
@@ -367,13 +493,17 @@ app.post("/run-intelligence", async (req, res) => {
 
     res.json({
       message: "Hawke scanned successfully",
-      total_leads_scanned: allLeads.length,
+      total_records: allRecords.length,
+      stage_field_detected: stageFieldName || "unknown — use GET /debug-students to identify",
       anomalies_detected: anomalyCount,
       anomalies,
     });
   } catch (error) {
     console.error("Hawke scan failed:", error.response?.data || error.message);
-    res.status(500).json({ error: "Hawke scan failed" });
+    res.status(500).json({
+      error: "Hawke scan failed",
+      details: error.response?.data || error.message,
+    });
   }
 });
 
@@ -385,4 +515,5 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Agent Hawke running on port ${PORT}`);
   console.log(`LS_BASE_URL: ${LS_BASE_URL}`);
+  console.log(`Student Object Event Code: ${STUDENT_OBJECT_EVENT_CODE}`);
 });
