@@ -7,47 +7,64 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-const {
-  LS_ACCESS_KEY,
-  LS_SECRET_KEY,
-  LS_BASE_URL
-} = process.env;
+const { LS_ACCESS_KEY, LS_SECRET_KEY, LS_BASE_URL } = process.env;
+
+/* ================================
+   CONFIG
+================================ */
 
 const HIGH_INTENT_SOURCES = [
-  "B2B Referral",
-  "Website",
-  "Chatbot",
-  "Inbound Phone Call",
-  "Pay per Click Ads"
+  "b2b referral",
+  "website",
+  "chatbot",
+  "inbound phone call",
+  "pay per click ads"
 ];
 
 const COUNSELOR_KEYWORDS = [
-  "Inbound Phone Call Activity",
-  "Outbound Phone Call Activity",
-  "Invorto Call Qualification",
-  "Meeting",
-  "Flostack Appointment"
+  "inbound phone call activity",
+  "outbound phone call activity",
+  "invorto call qualification",
+  "meeting",
+  "flostack appointment"
 ];
 
 const ENGAGEMENT_KEYWORDS = [
-  "Email Opened",
-  "Email Link Clicked",
-  "Dynamic Form Submission",
-  "Inbound Phone Call Activity",
-  "Outbound Phone Call Activity",
-  "Logged into Portal",
-  "Logged out of Portal",
-  "Flostack Appointment",
-  "Invorto Call Qualification",
-  "Meeting"
+  "email opened",
+  "email link clicked",
+  "dynamic form submission",
+  "inbound phone call activity",
+  "outbound phone call activity",
+  "logged into portal",
+  "logged out of portal",
+  "flostack appointment",
+  "invorto call qualification",
+  "meeting"
 ];
+
+/* ================================
+   HELPERS
+================================ */
+
+function normalize(value) {
+  return value ? value.toString().toLowerCase().trim() : "";
+}
 
 function daysBetween(dateString) {
   if (!dateString) return 0;
+
   const today = new Date();
   const past = new Date(dateString);
-  return Math.floor((today - past) / (1000 * 60 * 60 * 24));
+
+  if (isNaN(past.getTime())) return 0;
+
+  const diff = today - past;
+  return Math.floor(diff / (1000 * 60 * 60 * 24));
 }
+
+/* ================================
+   UPDATE LEAD
+================================ */
 
 async function updateLead(leadId, anomaly) {
   await axios.post(
@@ -56,7 +73,7 @@ async function updateLead(leadId, anomaly) {
       { Attribute: "mx_AI_Anomaly_Status", Value: "Active" },
       { Attribute: "mx_Latest_Anomaly_Type", Value: anomaly.type },
       { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
-      { Attribute: "mx_Latest_Anomaly_Confidence", Value: 90 },
+      { Attribute: "mx_Latest_Anomaly_Confidence", Value: 90 }, // number field
       { Attribute: "mx_Latest_Anomaly_Explanation", Value: anomaly.explanation },
       { Attribute: "mx_Last_Intelligence_Run", Value: new Date().toISOString().split("T")[0] }
     ],
@@ -66,12 +83,14 @@ async function updateLead(leadId, anomaly) {
         secretKey: LS_SECRET_KEY,
         leadId: leadId
       },
-      headers: {
-        "Content-Type": "application/json"
-      }
+      headers: { "Content-Type": "application/json" }
     }
   );
 }
+
+/* ================================
+   LOG ACTIVITY
+================================ */
 
 async function logAIDecision(leadId, anomaly) {
   await axios.post(
@@ -91,42 +110,43 @@ async function logAIDecision(leadId, anomaly) {
         accessKey: LS_ACCESS_KEY,
         secretKey: LS_SECRET_KEY
       },
-      headers: {
-        "Content-Type": "application/json"
-      }
+      headers: { "Content-Type": "application/json" }
     }
   );
 }
+
+/* ================================
+   FETCH ACTIVITIES
+================================ */
 
 async function fetchActivities(leadId) {
   const response = await axios.post(
     `${LS_BASE_URL}/LeadManagement.svc/Activity.Get`,
     {
-      ProspectId: leadId,
+      RelatedProspectId: leadId,
       Paging: { PageIndex: 1, PageSize: 20 }
     },
     {
       params: {
         accessKey: LS_ACCESS_KEY,
         secretKey: LS_SECRET_KEY
-      },
-      headers: {
-        "Content-Type": "application/json"
       }
     }
   );
 
-  return response.data?.Activity || [];
+  return response.data?.Data || [];
 }
+
+/* ================================
+   MAIN ENGINE
+================================ */
 
 app.post("/run-intelligence", async (req, res) => {
   try {
 
     const response = await axios.post(
       `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
-      {
-        Paging: { PageIndex: 1, PageSize: 100 }
-      },
+      { Paging: { PageIndex: 1, PageSize: 100 } },
       {
         params: {
           accessKey: LS_ACCESS_KEY,
@@ -135,45 +155,47 @@ app.post("/run-intelligence", async (req, res) => {
       }
     );
 
-    const leads = response.data?.Leads || response.data?.Data || [];
+    const leads = response.data?.Data || [];
+    console.log("Total Leads Fetched:", leads.length);
+
     let anomalyCount = 0;
 
     for (const lead of leads) {
 
-      const stage = lead.ProspectStage?.trim();
+      const stage = normalize(lead.ProspectStage);
+      const source = normalize(lead.Source);
       const stageEntered = lead.mx_Stage_Entered_On;
       const offerDate = lead.mx_Offer_Given_Date;
-      const source = lead.Source?.trim();
       const leadId = lead.ProspectID;
 
       const daysInStage = daysBetween(stageEntered);
       const offerAge = daysBetween(offerDate);
 
-        console.log("---- LEAD DEBUG ----");
-  console.log({
-    leadId,
-    stage,
-    source,
-    stageEntered,
-    daysInStage,
-    offerDate,
-    offerAge
-  });
-
       let anomaly = null;
 
-      if (offerDate && stage !== "Enrolled" && offerAge > 14) {
+      /* ========= RULE 1: Offer Stalled ========= */
+      if (
+        offerDate &&
+        stage !== "enrolled" &&
+        offerAge > 14
+      ) {
         anomaly = {
           type: "Offer Stalled",
           severity: "High",
-          explanation: `Offer given ${offerAge} days ago but student not enrolled.`
+          explanation: `Offer given ${offerAge} days ago but not enrolled.`
         };
       }
 
-      if (!anomaly && stage === "Application Completed" && daysInStage > 5) {
+      /* ========= RULE 2: Application Completed – No Counselor Activity ========= */
+      if (
+        !anomaly &&
+        stage === "application completed" &&
+        daysInStage > 5
+      ) {
         const activities = await fetchActivities(leadId);
+
         const counselorActivity = activities.some(a =>
-          COUNSELOR_KEYWORDS.includes(a.ActivityEvent)
+          COUNSELOR_KEYWORDS.includes(normalize(a.ActivityEvent))
         );
 
         if (!counselorActivity) {
@@ -185,10 +207,16 @@ app.post("/run-intelligence", async (req, res) => {
         }
       }
 
-      if (!anomaly && stage === "Application Pending" && daysInStage > 7) {
+      /* ========= RULE 3: Application Pending – Stalled ========= */
+      if (
+        !anomaly &&
+        stage === "application pending" &&
+        daysInStage > 7
+      ) {
         const activities = await fetchActivities(leadId);
+
         const engaged = activities.some(a =>
-          ENGAGEMENT_KEYWORDS.includes(a.ActivityEvent)
+          ENGAGEMENT_KEYWORDS.includes(normalize(a.ActivityEvent))
         );
 
         if (!engaged) {
@@ -200,19 +228,22 @@ app.post("/run-intelligence", async (req, res) => {
         }
       }
 
-      if (!anomaly &&
-          stage === "Engagement Initiated" &&
-          HIGH_INTENT_SOURCES.includes(source) &&
-          daysInStage > 7) {
-
+      /* ========= RULE 4: High Intent – No Movement ========= */
+      if (
+        !anomaly &&
+        stage === "engagement initiated" &&
+        HIGH_INTENT_SOURCES.includes(source) &&
+        daysInStage > 7
+      ) {
         anomaly = {
           type: "High Intent – No Movement",
           severity: "Medium",
-          explanation: `High intent source but no movement for ${daysInStage} days.`
+          explanation: `High intent source but no stage movement for ${daysInStage} days.`
         };
       }
 
       if (anomaly) {
+        console.log("ANOMALY DETECTED:", anomaly.type, "Lead:", leadId);
         await updateLead(leadId, anomaly);
         await logAIDecision(leadId, anomaly);
         anomalyCount++;
@@ -225,11 +256,14 @@ app.post("/run-intelligence", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("URL FAILED:", error.config?.url);
-    console.error("ERROR:", error.response?.data || error.message);
+    console.error("ENGINE ERROR:", error.response?.data || error.message);
     res.status(500).json({ error: "Hawke scan failed" });
   }
 });
+
+/* ================================
+   SERVER
+================================ */
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
