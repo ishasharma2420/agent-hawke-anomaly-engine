@@ -7,22 +7,29 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-const {
-  LS_ACCESS_KEY,
-  LS_SECRET_KEY,
-  LS_BASE_URL
-} = process.env;
+const { LS_ACCESS_KEY, LS_SECRET_KEY } = process.env;
+
+// Strip trailing slash from BASE_URL to prevent double-slash issues
+const LS_BASE_URL = (process.env.LS_BASE_URL || "").replace(/\/+$/, "");
 
 /* ================================
    CONFIG
 ================================ */
 
+const LEAD_TYPE_STUDENT = "OT_2";
+
+const TARGET_STAGES = [
+  "Engagement Initiated",
+  "Application Pending",
+  "Application Completed",
+];
+
 const HIGH_INTENT_SOURCES = [
-  "website",
-  "chatbot",
-  "pay per click ads",
-  "b2b referral",
-  "inbound phone call"
+  "B2B Referral",
+  "Website",
+  "Chatbot",
+  "Inbound Phone Call",
+  "Pay per Click Ads",
 ];
 
 const COUNSELOR_KEYWORDS = [
@@ -30,7 +37,7 @@ const COUNSELOR_KEYWORDS = [
   "Outbound Phone Call Activity",
   "Invorto Call Qualification",
   "Meeting",
-  "Flostack Appointment"
+  "Flostack Appointment",
 ];
 
 const ENGAGEMENT_KEYWORDS = [
@@ -43,8 +50,11 @@ const ENGAGEMENT_KEYWORDS = [
   "Logged out of Portal",
   "Flostack Appointment",
   "Invorto Call Qualification",
-  "Meeting"
+  "Meeting",
 ];
+
+// AI Decision Event code (from your LS Admin)
+const AI_DECISION_EVENT_CODE = 211;
 
 /* ================================
    HELPERS
@@ -57,103 +67,210 @@ function daysBetween(dateString) {
   return Math.floor((today - past) / (1000 * 60 * 60 * 24));
 }
 
-function normalize(value) {
-  return (value || "").toString().toLowerCase().trim();
+// Normalize LeadPropertyList array into a flat { key: value } object
+function flattenLead(lead) {
+  const props = {};
+  if (lead.LeadPropertyList) {
+    lead.LeadPropertyList.forEach((p) => {
+      props[p.Attribute] = p.Value;
+    });
+  }
+  return { ...lead, ...props };
 }
 
 /* ================================
-   FETCH LEADS (SEARCH API)
+   FETCH STUDENT LEADS BY STAGE
+   POST /LeadManagement.svc/Leads.Get
+   
+   Queries by ProspectStage, then filters
+   client-side for LeadType = OT_2 (Students only).
 ================================ */
 
-async function fetchLeads() {
+async function fetchStudentsByStage(stage) {
   const response = await axios.post(
-    `${LS_BASE_URL}/LeadManagement.svc/Leads.Search`,
+    `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
     {
       Parameter: {
-        Paging: { PageIndex: 1, PageSize: 100 }
-      }
+        LookupName: "ProspectStage",
+        LookupValue: stage,
+        SqlOperator: "=",
+      },
+      Columns: {
+        Include_CSV: [
+          "ProspectID",
+          "FirstName",
+          "LastName",
+          "EmailAddress",
+          "ProspectStage",
+          "LeadType",
+          "Source",
+          "Phone",
+          "CreatedOn",
+          "ModifiedOn",
+          "Score",
+          "EngagementScore",
+          "mx_Stage_Entered_On",
+          "mx_Offer_Given_Date",
+        ].join(","),
+      },
+      Sorting: {
+        ColumnName: "ModifiedOn",
+        Direction: "1",
+      },
+      Paging: {
+        PageIndex: 1,
+        PageSize: 200,
+      },
     },
-    {
-      params: {
-        accessKey: LS_ACCESS_KEY,
-        secretKey: LS_SECRET_KEY
-      }
-    }
-  );
-
-  return response.data?.Data || [];
-}
-
-/* ================================
-   FETCH ACTIVITIES
-================================ */
-
-async function fetchActivities(leadId) {
-  const response = await axios.post(
-  `${LS_BASE_URL}/LeadManagement.svc/Leads.Get`,
-  {
-    Paging: { PageIndex: 1, PageSize: 100 }
-  },
-  {
-    params: {
-      accessKey: LS_ACCESS_KEY,
-      secretKey: LS_SECRET_KEY
-    }
-  }
-);
-
-const leads = response.data?.Data || [];
-
-/* ================================
-   UPDATE LEAD
-================================ */
-
-async function updateLead(leadId, anomaly) {
-  await axios.post(
-    `${LS_BASE_URL}/LeadManagement.svc/Lead.Update`,
-    [
-      { Attribute: "mx_AI_Anomaly_Status", Value: "Active" },
-      { Attribute: "mx_Latest_Anomaly_Type", Value: anomaly.type },
-      { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
-      { Attribute: "mx_Latest_Anomaly_Confidence", Value: 90 },
-      { Attribute: "mx_Latest_Anomaly_Explanation", Value: anomaly.explanation },
-      { Attribute: "mx_Last_Intelligence_Run", Value: new Date().toISOString().split("T")[0] }
-    ],
     {
       params: {
         accessKey: LS_ACCESS_KEY,
         secretKey: LS_SECRET_KEY,
-        leadId: leadId
-      }
+      },
+      headers: { "Content-Type": "application/json" },
     }
   );
+
+  const rawLeads = response.data?.Leads || [];
+  const allFlattened = rawLeads.map(flattenLead);
+
+  // Filter to Students only (LeadType = OT_2)
+  const students = allFlattened.filter(
+    (l) => l.LeadType === LEAD_TYPE_STUDENT
+  );
+
+  console.log(
+    `Stage "${stage}": ${rawLeads.length} total leads, ${students.length} students (OT_2)`
+  );
+
+  return students;
 }
 
 /* ================================
-   LOG AI DECISION ACTIVITY
+   FETCH ACTIVITIES FOR A LEAD
+   POST /ProspectActivity.svc/Retrieve?leadId=X
+================================ */
+
+async function fetchActivities(leadId) {
+  try {
+    const response = await axios.post(
+      `${LS_BASE_URL}/ProspectActivity.svc/Retrieve`,
+      {
+        Parameter: {},
+        Paging: {
+          Offset: "0",
+          RowCount: "50",
+        },
+      },
+      {
+        params: {
+          accessKey: LS_ACCESS_KEY,
+          secretKey: LS_SECRET_KEY,
+          leadId: leadId,
+        },
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+
+    return response.data?.ProspectActivities || [];
+  } catch (err) {
+    console.error(
+      `Failed to fetch activities for ${leadId}:`,
+      err.response?.data || err.message
+    );
+    return [];
+  }
+}
+
+/* ================================
+   UPDATE LEAD FIELDS
+   POST /LeadManagement.svc/Lead.Update?leadId=X
+================================ */
+
+async function updateLead(leadId, anomaly) {
+  try {
+    await axios.post(
+      `${LS_BASE_URL}/LeadManagement.svc/Lead.Update`,
+      [
+        { Attribute: "mx_AI_Anomaly_Status", Value: "Active" },
+        { Attribute: "mx_Latest_Anomaly_Type", Value: anomaly.type },
+        { Attribute: "mx_Latest_Anomaly_Severity", Value: anomaly.severity },
+        { Attribute: "mx_Latest_Anomaly_Confidence", Value: "90" },
+        {
+          Attribute: "mx_Latest_Anomaly_Explanation",
+          Value: anomaly.explanation,
+        },
+        {
+          Attribute: "mx_Last_Intelligence_Run",
+          Value: new Date().toISOString().replace("T", " ").slice(0, 19),
+        },
+      ],
+      {
+        params: {
+          accessKey: LS_ACCESS_KEY,
+          secretKey: LS_SECRET_KEY,
+          leadId: leadId,
+        },
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+    console.log(`✅ Lead updated: ${leadId} → ${anomaly.type}`);
+  } catch (err) {
+    console.error(
+      `❌ Failed to update lead ${leadId}:`,
+      err.response?.data || err.message
+    );
+  }
+}
+
+/* ================================
+   LOG AI DECISION AS ACTIVITY
+   POST /ProspectActivity.svc/Create
 ================================ */
 
 async function logAIDecision(leadId, anomaly) {
-  await axios.post(
-    `${LS_BASE_URL}/LeadManagement.svc/Activity.Create`,
-    {
-      RelatedProspectId: leadId,
-      ActivityEvent: "AI Decision Event",
-      ActivityFields: [
-        { SchemaName: "mx_AI_Anomaly_Type", Value: anomaly.type },
-        { SchemaName: "mx_AI_Anomaly_Severity", Value: anomaly.severity },
-        { SchemaName: "mx_AI_Anomaly_Explanation", Value: anomaly.explanation },
-        { SchemaName: "mx_AI_Agent_Name", Value: "Agent Hawke" }
-      ]
-    },
-    {
-      params: {
-        accessKey: LS_ACCESS_KEY,
-        secretKey: LS_SECRET_KEY
+  try {
+    await axios.post(
+      `${LS_BASE_URL}/ProspectActivity.svc/Create`,
+      {
+        RelatedProspectId: leadId,
+        ActivityEvent: AI_DECISION_EVENT_CODE,
+        ActivityNote: `Agent Hawke: ${anomaly.type} (${anomaly.severity})`,
+        ActivityDateTime: new Date()
+          .toISOString()
+          .replace("T", " ")
+          .slice(0, 19),
+        Fields: [
+          { SchemaName: "mx_Custom_1", Value: anomaly.type },
+          { SchemaName: "mx_Custom_2", Value: anomaly.severity },
+          { SchemaName: "mx_Custom_3", Value: anomaly.explanation },
+          { SchemaName: "mx_Custom_4", Value: "Agent Hawke" },
+        ],
+      },
+      {
+        params: {
+          accessKey: LS_ACCESS_KEY,
+          secretKey: LS_SECRET_KEY,
+        },
+        headers: { "Content-Type": "application/json" },
       }
-    }
-  );
+    );
+    console.log(`✅ Activity logged: ${leadId} → ${anomaly.type}`);
+  } catch (err) {
+    console.error(
+      `❌ Failed to log activity for ${leadId}:`,
+      err.response?.data || err.message
+    );
+  }
 }
+
+/* ================================
+   HEALTH CHECK
+================================ */
+
+app.get("/", (req, res) => {
+  res.send("Agent Hawke is live 🦅");
+});
 
 /* ================================
    MAIN ENGINE
@@ -161,129 +278,148 @@ async function logAIDecision(leadId, anomaly) {
 
 app.post("/run-intelligence", async (req, res) => {
   try {
-    const leads = await fetchLeads();
+    // --- Step 1: Fetch student leads across target stages ---
+    let allStudents = [];
 
-    console.log("Total Leads Fetched:", leads.length);
+    for (const stage of TARGET_STAGES) {
+      const students = await fetchStudentsByStage(stage);
+      allStudents.push(...students);
+    }
 
+    console.log(`Total student leads fetched: ${allStudents.length}`);
+
+    if (allStudents.length === 0) {
+      return res.json({
+        message: "Hawke scanned — no student leads found in target stages",
+        total_leads_scanned: 0,
+        anomalies_detected: 0,
+        debug: {
+          stages_queried: TARGET_STAGES,
+          lead_type_filter: LEAD_TYPE_STUDENT,
+          base_url_used: LS_BASE_URL,
+        },
+      });
+    }
+
+    // --- Step 2: Run anomaly detection rules ---
     let anomalyCount = 0;
+    const anomalies = [];
 
-    for (const lead of leads) {
+    for (const lead of allStudents) {
+      const stage = (lead.ProspectStage || "").trim();
+      const source = (lead.Source || "").trim();
+      const stageEntered = lead.mx_Stage_Entered_On;
+      const offerDate = lead.mx_Offer_Given_Date;
       const leadId = lead.ProspectID;
-
-      const stage = normalize(
-        lead.ProspectStage ||
-        lead.ObjectStage ||
-        lead.mx_ObjectStage
-      );
-
-      const source = normalize(
-        lead.Source ||
-        lead.LeadSource ||
-        lead.mx_Lead_Source
-      );
-
-      const stageEntered =
-        lead.mx_Stage_Entered_On ||
-        lead.StageEnteredOn ||
-        lead.ProspectStageEnteredOn;
-
-      const offerDate =
-        lead.mx_Offer_Given_Date ||
-        lead.OfferGivenDate;
+      const name = `${lead.FirstName || ""} ${lead.LastName || ""}`.trim();
 
       const daysInStage = daysBetween(stageEntered);
       const offerAge = daysBetween(offerDate);
 
-      console.log("Processing:", {
-        leadId,
-        stage,
-        source,
-        daysInStage,
-        offerAge
-      });
+      console.log(
+        `Checking: ${name} (${leadId}) | Stage: ${stage} | Source: ${source} | DaysInStage: ${daysInStage} | OfferAge: ${offerAge}`
+      );
 
       let anomaly = null;
 
-      /* 1️⃣ Offer Stalled */
-      if (offerDate && stage !== "enrolled" && offerAge > 14) {
+      /* 1️⃣ OFFER STALLED */
+      if (offerDate && stage !== "Enrolled" && offerAge > 14) {
         anomaly = {
           type: "Offer Stalled",
           severity: "High",
-          explanation: `Offer given ${offerAge} days ago but student not enrolled.`
+          explanation: `Offer given ${offerAge} days ago but student not enrolled.`,
         };
       }
 
-      /* 2️⃣ Application Completed – No Counselor Activity */
-      if (!anomaly && stage === "application completed" && daysInStage > 5) {
+      /* 2️⃣ APPLICATION COMPLETED – NO COUNSELOR FOLLOW UP */
+      if (!anomaly && stage === "Application Completed" && daysInStage > 5) {
         const activities = await fetchActivities(leadId);
 
-        const counselorActivity = activities.some(a =>
-          COUNSELOR_KEYWORDS.includes(a.ActivityEvent)
-        );
+        const hasCounselor = activities.some((a) => {
+          const eventName = a.EventName || "";
+          return COUNSELOR_KEYWORDS.some((kw) => eventName.includes(kw));
+        });
 
-        if (!counselorActivity) {
+        if (!hasCounselor) {
           anomaly = {
             type: "Application Completed – No Counselor Follow-up",
             severity: "High",
-            explanation: `No counselor activity ${daysInStage} days after completion.`
+            explanation: `No counselor activity ${daysInStage} days after application completion.`,
           };
         }
       }
 
-      /* 3️⃣ Application Pending – Stalled */
-      if (!anomaly && stage === "application pending" && daysInStage > 7) {
+      /* 3️⃣ APPLICATION PENDING – STALLED */
+      if (!anomaly && stage === "Application Pending" && daysInStage > 7) {
         const activities = await fetchActivities(leadId);
 
-        const engaged = activities.some(a =>
-          ENGAGEMENT_KEYWORDS.includes(a.ActivityEvent)
-        );
+        const hasEngagement = activities.some((a) => {
+          const eventName = a.EventName || "";
+          return ENGAGEMENT_KEYWORDS.some((kw) => eventName.includes(kw));
+        });
 
-        if (!engaged) {
+        if (!hasEngagement) {
           anomaly = {
             type: "Application Pending – Stalled",
             severity: "Medium",
-            explanation: `No engagement activity ${daysInStage} days in pending stage.`
+            explanation: `No engagement activity ${daysInStage} days in Application Pending.`,
           };
         }
       }
 
-      /* 4️⃣ High Intent – No Movement */
+      /* 4️⃣ HIGH INTENT – NO MOVEMENT */
       if (
         !anomaly &&
-        stage === "engagement initiated" &&
+        stage === "Engagement Initiated" &&
         HIGH_INTENT_SOURCES.includes(source) &&
         daysInStage > 7
       ) {
         anomaly = {
           type: "High Intent – No Movement",
           severity: "Medium",
-          explanation: `High intent source but no stage movement for ${daysInStage} days.`
+          explanation: `High intent source but no stage movement for ${daysInStage} days.`,
         };
       }
 
       if (anomaly) {
+        console.log(`🚨 Anomaly: ${name} → ${anomaly.type}`);
         await updateLead(leadId, anomaly);
         await logAIDecision(leadId, anomaly);
         anomalyCount++;
+        anomalies.push({
+          leadId,
+          name,
+          email: lead.EmailAddress || null,
+          stage,
+          source,
+          daysInStage,
+          ...anomaly,
+        });
       }
     }
 
     res.json({
       message: "Hawke scanned successfully",
-      anomalies_detected: anomalyCount
+      total_leads_scanned: allStudents.length,
+      anomalies_detected: anomalyCount,
+      anomalies,
     });
-
   } catch (error) {
-    console.error("ENGINE ERROR:", error.response?.data || error.message);
-    res.status(500).json({ error: "Hawke scan failed" });
+    console.error("Hawke scan failed:", error.response?.data || error.message);
+    res.status(500).json({
+      error: "Hawke scan failed",
+      details: error.response?.data || error.message,
+    });
   }
 });
 
 /* ================================
-   SERVER
+   START SERVER
 ================================ */
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Agent Hawke running on port ${PORT}`);
+  console.log(`LS_BASE_URL: ${LS_BASE_URL}`);
+  console.log(`Filtering for LeadType: ${LEAD_TYPE_STUDENT}`);
 });
