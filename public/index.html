@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Hawke — Anomaly Intelligence</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700&family=JetBrains+Mono:wght@400;500;600&family=Playfair+Display:wght@600;700;800&display=swap" rel="stylesheet">
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        navy: { 50:'#f0f4f8', 100:'#d9e2ec', 200:'#bcccdc', 300:'#9fb3c8', 400:'#829ab1', 500:'#627d98', 600:'#486581', 700:'#334E68', 800:'#243B53', 900:'#1B3A5C', 950:'#102A43' },
+        teal: { 50:'#f0fdfa', 100:'#ccfbf1', 200:'#99f6e4', 300:'#5eead4', 400:'#2dd4bf', 500:'#14b8a6', 600:'#0D9488', 700:'#0f766e', 800:'#115e59', 900:'#134e4a' },
+        severity: { critical:'#dc2626', high:'#f59e0b', medium:'#6366f1' },
+      },
+      fontFamily: {
+        display: ['"Playfair Display"', 'serif'],
+        body: ['"DM Sans"', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'DM Sans', sans-serif; background: #f0f4f8; color: #243B53; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #bcccdc; border-radius: 3px; }
+
+  /* Loading Animation */
+  @keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 1; } 100% { transform: scale(1.4); opacity: 0; } }
+  @keyframes scan-line { 0% { top: 0; } 100% { top: 100%; } }
+  @keyframes fade-up { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+  @keyframes typewriter { from { width: 0; } to { width: 100%; } }
+  @keyframes blink-caret { 50% { border-color: transparent; } }
+  @keyframes radar-sweep { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes count-up { from { opacity: 0; transform: scale(0.5); } to { opacity: 1; transform: scale(1); } }
+
+  .animate-fade-up { animation: fade-up 0.5s ease-out forwards; }
+  .animate-fade-up-delay-1 { animation: fade-up 0.5s ease-out 0.1s forwards; opacity: 0; }
+  .animate-fade-up-delay-2 { animation: fade-up 0.5s ease-out 0.2s forwards; opacity: 0; }
+  .animate-fade-up-delay-3 { animation: fade-up 0.5s ease-out 0.3s forwards; opacity: 0; }
+  .animate-fade-up-delay-4 { animation: fade-up 0.5s ease-out 0.4s forwards; opacity: 0; }
+
+  .loading-step { transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+  .loading-step.active { color: #0D9488; }
+  .loading-step.complete { color: #0D9488; }
+  .loading-step.pending { color: #9fb3c8; }
+
+  .step-dot { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.4s ease; }
+  .step-dot.pending { background: #d9e2ec; color: #829ab1; }
+  .step-dot.active { background: #0D9488; color: white; box-shadow: 0 0 0 4px rgba(13, 148, 136, 0.2); }
+  .step-dot.complete { background: #0D9488; color: white; }
+
+  .step-connector { height: 2px; flex: 1; transition: background 0.4s ease; }
+  .step-connector.pending { background: #d9e2ec; }
+  .step-connector.active, .step-connector.complete { background: #0D9488; }
+
+  /* Radar animation */
+  .radar-container { position: relative; width: 160px; height: 160px; }
+  .radar-ring { position: absolute; border: 1px solid rgba(13,148,136,0.2); border-radius: 50%; }
+  .radar-ring-1 { inset: 0; }
+  .radar-ring-2 { inset: 20px; }
+  .radar-ring-3 { inset: 40px; }
+  .radar-sweep { position: absolute; inset: 0; animation: radar-sweep 2s linear infinite; }
+  .radar-sweep::before {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 50%; height: 2px;
+    background: linear-gradient(90deg, #0D9488, transparent);
+    transform-origin: left center;
+  }
+  .radar-dot { position: absolute; width: 6px; height: 6px; border-radius: 50%; background: #0D9488; }
+  .radar-dot.blink { animation: pulse-ring 1.5s ease-out infinite; }
+
+  /* Severity badges */
+  .badge-critical { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+  .badge-high { background: #fffbeb; color: #d97706; border: 1px solid #fde68a; }
+  .badge-medium { background: #eef2ff; color: #4f46e5; border: 1px solid #c7d2fe; }
+
+  /* Confidence bar */
+  .confidence-bar { height: 6px; border-radius: 3px; background: #e2e8f0; overflow: hidden; }
+  .confidence-fill { height: 100%; border-radius: 3px; transition: width 1s ease-out; }
+
+  /* Expandable rows */
+  .expand-content { max-height: 0; overflow: hidden; transition: max-height 0.3s ease-out, padding 0.3s ease; }
+  .expand-content.open { max-height: 200px; }
+
+  /* Card hover */
+  .hover-card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+  .hover-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px -5px rgba(27, 58, 92, 0.1), 0 4px 10px -6px rgba(27, 58, 92, 0.05); }
+
+  /* Slider styling */
+  input[type="range"] { -webkit-appearance: none; appearance: none; height: 6px; border-radius: 3px; background: #d9e2ec; outline: none; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #0D9488; cursor: pointer; box-shadow: 0 2px 6px rgba(13,148,136,0.3); }
+
+  /* Tooltip */
+  .tooltip { position: relative; }
+  .tooltip::after {
+    content: attr(data-tip);
+    position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%) translateY(4px);
+    padding: 4px 10px; background: #243B53; color: white; font-size: 12px; border-radius: 4px;
+    white-space: nowrap; opacity: 0; pointer-events: none; transition: all 0.2s ease;
+  }
+  .tooltip:hover::after { opacity: 1; transform: translateX(-50%) translateY(-4px); }
+
+  /* Number counter */
+  .counter { display: inline-block; animation: count-up 0.6s ease-out forwards; }
+
+  /* Table row hover */
+  .table-row { transition: background 0.15s ease; }
+  .table-row:hover { background: #f8fafc; }
+
+  /* Filter active state */
+  .filter-btn { transition: all 0.2s ease; }
+  .filter-btn.active { background: #1B3A5C; color: white; }
+
+  /* Source badge */
+  .source-crm { background: #eff6ff; color: #2563eb; border: 1px solid #bfdbfe; }
+  .source-sis { background: #f0fdf4; color: #16a34a; border: 1px solid #bbf7d0; }
+
+  /* Priority badges */
+  .priority-immediate { background: #fef2f2; color: #dc2626; }
+  .priority-short-term { background: #fffbeb; color: #d97706; }
+  .priority-medium-term { background: #eef2ff; color: #4f46e5; }
+
+  /* Effort badges */
+  .effort-low { background: #f0fdf4; color: #16a34a; }
+  .effort-medium { background: #fffbeb; color: #d97706; }
+  .effort-high { background: #fef2f2; color: #dc2626; }
+</style>
+</head>
+<body class="min-h-screen">
+
+<!-- ==================== LOADING STATE ==================== -->
+<div id="loading-screen" class="min-h-screen flex flex-col items-center justify-center px-4">
+  <div class="text-center mb-12">
+    <!-- Radar Animation -->
+    <div class="radar-container mx-auto mb-8">
+      <div class="radar-ring radar-ring-1"></div>
+      <div class="radar-ring radar-ring-2"></div>
+      <div class="radar-ring radar-ring-3"></div>
+      <div class="radar-sweep"></div>
+      <div class="radar-dot blink" style="top:25%; left:65%;"></div>
+      <div class="radar-dot blink" style="top:60%; left:30%; animation-delay:0.5s;"></div>
+      <div class="radar-dot blink" style="top:40%; left:75%; animation-delay:1s;"></div>
+      <!-- Center icon -->
+      <div class="absolute inset-0 flex items-center justify-center">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0D9488" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>
+        </svg>
+      </div>
+    </div>
+    <h1 class="font-display text-3xl font-bold text-navy-900 mb-2">Agent Hawke</h1>
+    <p class="text-navy-500 text-sm tracking-wide uppercase font-medium">Anomaly Intelligence Scanner</p>
+  </div>
+
+  <!-- Steps -->
+  <div class="w-full max-w-2xl">
+    <div class="flex items-center mb-6 px-4">
+      <div id="step-dot-1" class="step-dot pending"><span class="text-sm font-semibold">1</span></div>
+      <div id="step-conn-1" class="step-connector pending"></div>
+      <div id="step-dot-2" class="step-dot pending"><span class="text-sm font-semibold">2</span></div>
+      <div id="step-conn-2" class="step-connector pending"></div>
+      <div id="step-dot-3" class="step-dot pending"><span class="text-sm font-semibold">3</span></div>
+      <div id="step-conn-3" class="step-connector pending"></div>
+      <div id="step-dot-4" class="step-dot pending"><span class="text-sm font-semibold">4</span></div>
+      <div id="step-conn-4" class="step-connector pending"></div>
+      <div id="step-dot-5" class="step-dot pending"><span class="text-sm font-semibold">5</span></div>
+    </div>
+    <div class="flex justify-between px-0 text-xs font-medium">
+      <div id="step-label-1" class="loading-step pending text-center w-1/5">
+        <div class="flex items-center justify-center gap-1">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          Spike Detected
+        </div>
+      </div>
+      <div id="step-label-2" class="loading-step pending text-center w-1/5">
+        <div class="flex items-center justify-center gap-1">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+          AI Analyzes
+        </div>
+      </div>
+      <div id="step-label-3" class="loading-step pending text-center w-1/5">
+        <div class="flex items-center justify-center gap-1">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          Explains
+        </div>
+      </div>
+      <div id="step-label-4" class="loading-step pending text-center w-1/5">
+        <div class="flex items-center justify-center gap-1">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>
+          Simulates
+        </div>
+      </div>
+      <div id="step-label-5" class="loading-step pending text-center w-1/5">
+        <div class="flex items-center justify-center gap-1">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          Recommends
+        </div>
+      </div>
+    </div>
+    <div class="mt-8 text-center">
+      <p id="loading-status" class="text-navy-400 text-sm font-mono">Initializing scan...</p>
+    </div>
+  </div>
+</div>
+
+
+<!-- ==================== MAIN DASHBOARD ==================== -->
+<div id="dashboard" class="hidden">
+  <!-- Header -->
+  <header class="bg-navy-900 text-white sticky top-0 z-50 shadow-lg">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div class="flex items-center justify-between h-16">
+        <div class="flex items-center gap-3">
+          <div class="w-9 h-9 rounded-lg bg-teal-600 flex items-center justify-center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>
+            </svg>
+          </div>
+          <div>
+            <h1 class="font-display text-lg font-bold tracking-tight">Agent Hawke</h1>
+            <p class="text-navy-300 text-[11px] tracking-widest uppercase">Anomaly Intelligence</p>
+          </div>
+        </div>
+        <div class="flex items-center gap-4">
+          <span id="header-timestamp" class="text-navy-300 text-xs font-mono hidden sm:block"></span>
+          <button id="rescan-btn" onclick="runScan()" class="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 rounded-lg text-sm font-medium transition-colors">
+            <svg id="rescan-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>
+            </svg>
+            <span id="rescan-text">Re-scan</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+
+    <!-- ===== SUMMARY PANEL ===== -->
+    <section id="summary-panel" class="animate-fade-up">
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <!-- Total Scanned -->
+        <div class="bg-white rounded-xl p-4 shadow-sm border border-navy-100">
+          <p class="text-[11px] uppercase tracking-wider text-navy-400 font-medium mb-1">Leads Scanned</p>
+          <p id="stat-scanned" class="text-2xl font-bold text-navy-900 font-mono">—</p>
+        </div>
+        <!-- Anomalies Found -->
+        <div class="bg-white rounded-xl p-4 shadow-sm border border-navy-100">
+          <p class="text-[11px] uppercase tracking-wider text-navy-400 font-medium mb-1">Anomalies</p>
+          <p id="stat-anomalies" class="text-2xl font-bold text-navy-900 font-mono">—</p>
+        </div>
+        <!-- Critical -->
+        <div class="bg-white rounded-xl p-4 shadow-sm border border-severity-critical/20">
+          <p class="text-[11px] uppercase tracking-wider text-navy-400 font-medium mb-1">Critical</p>
+          <p id="stat-critical" class="text-2xl font-bold text-severity-critical font-mono">—</p>
+        </div>
+        <!-- High -->
+        <div class="bg-white rounded-xl p-4 shadow-sm border border-severity-high/20">
+          <p class="text-[11px] uppercase tracking-wider text-navy-400 font-medium mb-1">High</p>
+          <p id="stat-high" class="text-2xl font-bold text-severity-high font-mono">—</p>
+        </div>
+        <!-- Medium -->
+        <div class="bg-white rounded-xl p-4 shadow-sm border border-severity-medium/20">
+          <p class="text-[11px] uppercase tracking-wider text-navy-400 font-medium mb-1">Medium</p>
+          <p id="stat-medium" class="text-2xl font-bold text-severity-medium font-mono">—</p>
+        </div>
+        <!-- SIS Match -->
+        <div class="bg-white rounded-xl p-4 shadow-sm border border-navy-100">
+          <p class="text-[11px] uppercase tracking-wider text-navy-400 font-medium mb-1">SIS Match</p>
+          <p id="stat-sis" class="text-2xl font-bold text-teal-600 font-mono">—</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== RISK SUMMARY ===== -->
+    <section id="risk-summary-section" class="animate-fade-up-delay-1">
+      <div class="bg-gradient-to-r from-navy-900 to-navy-800 rounded-xl p-5 text-white shadow-lg">
+        <div class="flex items-start gap-3">
+          <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5eead4" stroke-width="2"><path d="M12 9v4m0 4h.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+          </div>
+          <div>
+            <h2 class="font-display text-base font-bold mb-2 text-teal-300">Executive Risk Summary</h2>
+            <p id="risk-summary-text" class="text-navy-200 text-sm leading-relaxed"></p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== ANOMALIES TABLE ===== -->
+    <section id="anomalies-section" class="animate-fade-up-delay-2">
+      <div class="bg-white rounded-xl shadow-sm border border-navy-100 overflow-hidden">
+        <!-- Table Header -->
+        <div class="px-5 py-4 border-b border-navy-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 class="font-display text-lg font-bold text-navy-900">Detected Anomalies</h2>
+            <p id="anomaly-count-label" class="text-navy-400 text-xs mt-0.5"></p>
+          </div>
+          <!-- Filters -->
+          <div class="flex flex-wrap gap-2">
+            <div class="flex gap-1 bg-navy-50 rounded-lg p-1">
+              <button class="filter-btn active text-xs px-3 py-1.5 rounded-md font-medium" data-filter="severity" data-value="all" onclick="setFilter('severity','all',this)">All</button>
+              <button class="filter-btn text-xs px-3 py-1.5 rounded-md font-medium text-navy-500" data-filter="severity" data-value="Critical" onclick="setFilter('severity','Critical',this)">Critical</button>
+              <button class="filter-btn text-xs px-3 py-1.5 rounded-md font-medium text-navy-500" data-filter="severity" data-value="High" onclick="setFilter('severity','High',this)">High</button>
+              <button class="filter-btn text-xs px-3 py-1.5 rounded-md font-medium text-navy-500" data-filter="severity" data-value="Medium" onclick="setFilter('severity','Medium',this)">Medium</button>
+            </div>
+            <div class="flex gap-1 bg-navy-50 rounded-lg p-1">
+              <button class="filter-btn active text-xs px-3 py-1.5 rounded-md font-medium" data-filter="source" data-value="all" onclick="setFilter('source','all',this)">All Sources</button>
+              <button class="filter-btn text-xs px-3 py-1.5 rounded-md font-medium text-navy-500" data-filter="source" data-value="crm" onclick="setFilter('source','crm',this)">CRM</button>
+              <button class="filter-btn text-xs px-3 py-1.5 rounded-md font-medium text-navy-500" data-filter="source" data-value="sis" onclick="setFilter('source','sis',this)">SIS</button>
+            </div>
+          </div>
+        </div>
+        <!-- Table -->
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-[11px] uppercase tracking-wider text-navy-400 bg-navy-50/50">
+                <th class="px-5 py-3 font-medium">Student</th>
+                <th class="px-3 py-3 font-medium hidden sm:table-cell">CRM Stage</th>
+                <th class="px-3 py-3 font-medium">Anomaly Type</th>
+                <th class="px-3 py-3 font-medium">Severity</th>
+                <th class="px-3 py-3 font-medium hidden md:table-cell">Source</th>
+                <th class="px-3 py-3 font-medium hidden lg:table-cell">Confidence</th>
+                <th class="px-3 py-3 font-medium w-10"></th>
+              </tr>
+            </thead>
+            <tbody id="anomaly-tbody"></tbody>
+          </table>
+        </div>
+        <!-- Pagination -->
+        <div class="px-5 py-3 border-t border-navy-100 flex items-center justify-between">
+          <p id="pagination-info" class="text-xs text-navy-400"></p>
+          <div class="flex gap-1">
+            <button id="prev-btn" onclick="changePage(-1)" class="px-3 py-1.5 text-xs font-medium text-navy-500 bg-navy-50 rounded-md hover:bg-navy-100 transition-colors disabled:opacity-40" disabled>← Prev</button>
+            <button id="next-btn" onclick="changePage(1)" class="px-3 py-1.5 text-xs font-medium text-navy-500 bg-navy-50 rounded-md hover:bg-navy-100 transition-colors disabled:opacity-40" disabled>Next →</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== ROOT CAUSES + RECOMMENDATIONS ===== -->
+    <div class="grid lg:grid-cols-2 gap-6">
+      <!-- Root Cause Analysis -->
+      <section id="root-causes-section" class="animate-fade-up-delay-3">
+        <div class="bg-white rounded-xl shadow-sm border border-navy-100 overflow-hidden h-full">
+          <div class="px-5 py-4 border-b border-navy-100">
+            <h2 class="font-display text-lg font-bold text-navy-900">Root Cause Analysis</h2>
+            <p class="text-navy-400 text-xs mt-0.5">AI-identified patterns driving anomalies</p>
+          </div>
+          <div id="root-causes-list" class="p-5 space-y-4"></div>
+        </div>
+      </section>
+
+      <!-- Recommendations -->
+      <section id="recommendations-section" class="animate-fade-up-delay-4">
+        <div class="bg-white rounded-xl shadow-sm border border-navy-100 overflow-hidden h-full">
+          <div class="px-5 py-4 border-b border-navy-100">
+            <h2 class="font-display text-lg font-bold text-navy-900">AI Recommendations</h2>
+            <p class="text-navy-400 text-xs mt-0.5">Prioritized actions for resolution</p>
+          </div>
+          <div id="recommendations-list" class="p-5 space-y-4"></div>
+        </div>
+      </section>
+    </div>
+
+    <!-- ===== IMPACT SIMULATOR ===== -->
+    <section id="simulator-section" class="animate-fade-up-delay-4">
+      <div class="bg-white rounded-xl shadow-sm border border-navy-100 overflow-hidden">
+        <div class="px-5 py-4 border-b border-navy-100">
+          <div class="flex items-center gap-2">
+            <h2 class="font-display text-lg font-bold text-navy-900">Impact Simulator</h2>
+            <span class="text-[10px] px-2 py-0.5 bg-teal-50 text-teal-700 rounded-full font-medium uppercase tracking-wider">What-If</span>
+          </div>
+          <p class="text-navy-400 text-xs mt-0.5">Model how interventions could reduce anomalies</p>
+        </div>
+        <div class="p-5">
+          <div class="grid md:grid-cols-2 gap-8">
+            <!-- Sliders -->
+            <div class="space-y-6">
+              <div>
+                <div class="flex justify-between mb-2">
+                  <label class="text-sm font-medium text-navy-700">Counselor follow-up within 48hrs</label>
+                  <span id="slider1-val" class="text-sm font-mono font-bold text-teal-600">50%</span>
+                </div>
+                <input type="range" id="slider-followup" min="0" max="100" value="50" class="w-full" oninput="updateSlider(1)">
+                <div class="flex justify-between text-[10px] text-navy-300 mt-1"><span>0%</span><span>100%</span></div>
+              </div>
+              <div>
+                <div class="flex justify-between mb-2">
+                  <label class="text-sm font-medium text-navy-700">Tuition payment plan offered</label>
+                  <span id="slider2-val" class="text-sm font-mono font-bold text-teal-600">50%</span>
+                </div>
+                <input type="range" id="slider-tuition" min="0" max="100" value="50" class="w-full" oninput="updateSlider(2)">
+                <div class="flex justify-between text-[10px] text-navy-300 mt-1"><span>0%</span><span>100%</span></div>
+              </div>
+              <button onclick="runSimulation()" class="w-full py-3 bg-navy-900 hover:bg-navy-800 text-white rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                Run Simulation
+              </button>
+            </div>
+            <!-- Results -->
+            <div id="sim-results" class="bg-navy-50 rounded-xl p-5 flex flex-col items-center justify-center text-center">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#9fb3c8" stroke-width="1.5" class="mb-3">
+                <path d="M3 3v18h18"/><path d="M7 16l4-8 4 4 6-10"/>
+              </svg>
+              <p class="text-navy-400 text-sm">Adjust sliders and click <strong>Run Simulation</strong> to see projected impact</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="text-center py-4">
+      <p class="text-navy-300 text-[11px] tracking-wider uppercase">Agent Hawke v1.0 — Anomaly Intelligence by LeadSquared AI Lab</p>
+    </footer>
+  </main>
+</div>
+
+<script>
+// ====================== STATE ======================
+let scanData = null;
+let filteredAnomalies = [];
+let currentPage = 1;
+const PAGE_SIZE = 10;
+let activeFilters = { severity: 'all', source: 'all' };
+
+// ====================== CONFIG ======================
+// ⚠️ REPLACE THIS with your Render backend URL
+const API_BASE = 'https://agent-hawke-anomaly-engine.onrender.com';
+
+// ====================== LOADING ANIMATION ======================
+const STEP_LABELS = [
+  'Scanning CRM for spikes...',
+  'AI analyzing anomaly patterns...',
+  'Generating explanations...',
+  'Running impact simulations...',
+  'Preparing recommendations...'
+];
+
+function setLoadingStep(step) {
+  for (let i = 1; i <= 5; i++) {
+    const dot = document.getElementById(`step-dot-${i}`);
+    const label = document.getElementById(`step-label-${i}`);
+    const conn = i < 5 ? document.getElementById(`step-conn-${i}`) : null;
+
+    if (i < step) {
+      dot.className = 'step-dot complete';
+      dot.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
+      label.className = 'loading-step complete text-center w-1/5';
+      if (conn) conn.className = 'step-connector complete';
+    } else if (i === step) {
+      dot.className = 'step-dot active';
+      dot.innerHTML = `<span class="text-sm font-semibold">${i}</span>`;
+      label.className = 'loading-step active text-center w-1/5';
+      if (conn) conn.className = 'step-connector pending';
+    } else {
+      dot.className = 'step-dot pending';
+      dot.innerHTML = `<span class="text-sm font-semibold">${i}</span>`;
+      label.className = 'loading-step pending text-center w-1/5';
+      if (conn) conn.className = 'step-connector pending';
+    }
+  }
+  document.getElementById('loading-status').textContent = STEP_LABELS[step - 1] || '';
+}
+
+async function runScan() {
+  // Show loading
+  document.getElementById('loading-screen').classList.remove('hidden');
+  document.getElementById('dashboard').classList.add('hidden');
+
+  // Reset steps
+  setLoadingStep(1);
+
+  // Animate steps over the scan duration
+  const stepTimers = [
+    setTimeout(() => setLoadingStep(2), 4000),
+    setTimeout(() => setLoadingStep(3), 8000),
+    setTimeout(() => setLoadingStep(4), 12000),
+    setTimeout(() => setLoadingStep(5), 16000),
+  ];
+
+  try {
+    const res = await fetch(`${API_BASE}/run-intelligence`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    scanData = await res.json();
+  } catch (err) {
+    // Fallback: try /last-scan
+    try {
+      const res2 = await fetch(`${API_BASE}/last-scan`);
+      if (res2.ok) {
+        scanData = await res2.json();
+      } else {
+        alert('Scan failed. Please check your backend connection.');
+        stepTimers.forEach(clearTimeout);
+        return;
+      }
+    } catch (e2) {
+      alert('Cannot reach Agent Hawke backend. Check your Render URL.');
+      stepTimers.forEach(clearTimeout);
+      return;
+    }
+  }
+
+  // Complete remaining steps quickly
+  stepTimers.forEach(clearTimeout);
+  for (let i = 1; i <= 5; i++) {
+    setLoadingStep(i);
+    await new Promise(r => setTimeout(r, 200));
+  }
+  // Mark step 5 complete
+  const dot5 = document.getElementById('step-dot-5');
+  dot5.className = 'step-dot complete';
+  dot5.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>';
+  document.getElementById('step-label-5').className = 'loading-step complete text-center w-1/5';
+  document.getElementById('loading-status').textContent = 'Scan complete. Rendering dashboard...';
+
+  await new Promise(r => setTimeout(r, 600));
+
+  renderDashboard();
+}
+
+// ====================== RENDER DASHBOARD ======================
+function renderDashboard() {
+  document.getElementById('loading-screen').classList.add('hidden');
+  document.getElementById('dashboard').classList.remove('hidden');
+
+  if (!scanData) return;
+
+  const d = scanData;
+
+  // Header timestamp
+  const ts = new Date(d.timestamp);
+  document.getElementById('header-timestamp').textContent = `Last scan: ${ts.toLocaleString()}`;
+
+  // Summary stats
+  animateCounter('stat-scanned', d.total_leads_scanned || 0);
+  animateCounter('stat-anomalies', d.anomalies_detected || 0);
+  animateCounter('stat-critical', d.by_severity?.critical || 0);
+  animateCounter('stat-high', d.by_severity?.high || 0);
+  animateCounter('stat-medium', d.by_severity?.medium || 0);
+  document.getElementById('stat-sis').textContent = d.sis_match_rate || '—';
+
+  // Risk summary
+  document.getElementById('risk-summary-text').textContent = d.ai_analysis?.riskSummary || 'No risk summary available.';
+
+  // Anomalies
+  filteredAnomalies = [...(d.anomalies || [])];
+  currentPage = 1;
+  activeFilters = { severity: 'all', source: 'all' };
+  renderAnomalyTable();
+
+  // Root causes
+  renderRootCauses(d.ai_analysis?.rootCauses || []);
+
+  // Recommendations
+  renderRecommendations(d.ai_analysis?.recommendations || []);
+}
+
+// ====================== COUNTER ANIMATION ======================
+function animateCounter(id, target) {
+  const el = document.getElementById(id);
+  const duration = 800;
+  const start = performance.now();
+  const tick = (now) => {
+    const elapsed = now - start;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = Math.round(eased * target);
+    if (progress < 1) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+// ====================== ANOMALY TABLE ======================
+function applyFilters() {
+  let list = [...(scanData?.anomalies || [])];
+  if (activeFilters.severity !== 'all') {
+    list = list.filter(a => a.severity === activeFilters.severity);
+  }
+  if (activeFilters.source !== 'all') {
+    list = list.filter(a => (a.source || '').toLowerCase() === activeFilters.source);
+  }
+  filteredAnomalies = list;
+  currentPage = 1;
+  renderAnomalyTable();
+}
+
+function setFilter(type, value, btn) {
+  activeFilters[type] = value;
+  // Update button states
+  const group = btn.parentElement;
+  group.querySelectorAll('.filter-btn').forEach(b => {
+    b.classList.remove('active');
+    b.classList.add('text-navy-500');
+  });
+  btn.classList.add('active');
+  btn.classList.remove('text-navy-500');
+  applyFilters();
+}
+
+function renderAnomalyTable() {
+  const tbody = document.getElementById('anomaly-tbody');
+  const total = filteredAnomalies.length;
+  const totalPages = Math.ceil(total / PAGE_SIZE) || 1;
+  const start = (currentPage - 1) * PAGE_SIZE;
+  const end = Math.min(start + PAGE_SIZE, total);
+  const page = filteredAnomalies.slice(start, end);
+
+  document.getElementById('anomaly-count-label').textContent = `Showing ${total} anomalies`;
+  document.getElementById('pagination-info').textContent = `Page ${currentPage} of ${totalPages} · ${total} results`;
+  document.getElementById('prev-btn').disabled = currentPage <= 1;
+  document.getElementById('next-btn').disabled = currentPage >= totalPages;
+
+  tbody.innerHTML = page.map((a, i) => {
+    const idx = start + i;
+    const sevClass = a.severity === 'Critical' ? 'badge-critical' : a.severity === 'High' ? 'badge-high' : 'badge-medium';
+    const srcClass = (a.source || '').toLowerCase() === 'sis' ? 'source-sis' : 'source-crm';
+    const leadUrl = `https://run.leadsquared.com/app/Home/Leads/LeadView?LeadId=${a.leadId}`;
+    const confColor = a.confidence >= 80 ? '#0D9488' : a.confidence >= 60 ? '#f59e0b' : '#6366f1';
+
+    return `
+      <tr class="table-row border-b border-navy-50 cursor-pointer" onclick="toggleExpand(${idx})">
+        <td class="px-5 py-3">
+          <a href="${leadUrl}" target="_blank" onclick="event.stopPropagation()" class="text-teal-600 hover:text-teal-700 font-medium hover:underline">${escHtml(a.name)}</a>
+          <p class="text-[11px] text-navy-400 mt-0.5">${escHtml(a.email || '')}</p>
+        </td>
+        <td class="px-3 py-3 hidden sm:table-cell"><span class="text-xs text-navy-600">${escHtml(a.crmStage || '—')}</span></td>
+        <td class="px-3 py-3"><span class="text-xs font-medium text-navy-700">${escHtml(a.type || '—')}</span></td>
+        <td class="px-3 py-3"><span class="text-[11px] px-2.5 py-1 rounded-full font-semibold ${sevClass}">${a.severity}</span></td>
+        <td class="px-3 py-3 hidden md:table-cell"><span class="text-[11px] px-2 py-0.5 rounded-full font-medium ${srcClass}">${a.source}</span></td>
+        <td class="px-3 py-3 hidden lg:table-cell">
+          <div class="flex items-center gap-2">
+            <div class="confidence-bar w-16"><div class="confidence-fill" style="width:${a.confidence}%;background:${confColor}"></div></div>
+            <span class="text-[11px] font-mono text-navy-500">${a.confidence}%</span>
+          </div>
+        </td>
+        <td class="px-3 py-3">
+          <svg id="chevron-${idx}" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9fb3c8" stroke-width="2" class="transition-transform duration-200"><polyline points="6 9 12 15 18 9"/></svg>
+        </td>
+      </tr>
+      <tr id="expand-row-${idx}" class="hidden">
+        <td colspan="7" class="px-5 py-0">
+          <div id="expand-content-${idx}" class="expand-content">
+            <div class="py-3 pl-4 border-l-2 border-teal-500 my-2">
+              <p class="text-sm text-navy-600 leading-relaxed">${escHtml(a.explanation || 'No explanation available.')}</p>
+              ${a.hasSIS ? `<div class="mt-2 flex flex-wrap gap-3 text-[11px] text-navy-400">
+                ${a.enrollmentStatus ? `<span>Enrollment: <strong class="text-navy-600">${escHtml(a.enrollmentStatus)}</strong></span>` : ''}
+                ${a.academicStanding ? `<span>Standing: <strong class="text-navy-600">${escHtml(a.academicStanding)}</strong></span>` : ''}
+                ${a.tuitionBalance !== undefined ? `<span>Tuition: <strong class="text-navy-600">$${a.tuitionBalance.toLocaleString()}</strong></span>` : ''}
+              </div>` : ''}
+            </div>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function toggleExpand(idx) {
+  const row = document.getElementById(`expand-row-${idx}`);
+  const content = document.getElementById(`expand-content-${idx}`);
+  const chevron = document.getElementById(`chevron-${idx}`);
+
+  if (row.classList.contains('hidden')) {
+    row.classList.remove('hidden');
+    requestAnimationFrame(() => content.classList.add('open'));
+    chevron.style.transform = 'rotate(180deg)';
+  } else {
+    content.classList.remove('open');
+    chevron.style.transform = 'rotate(0deg)';
+    setTimeout(() => row.classList.add('hidden'), 300);
+  }
+}
+
+function changePage(dir) {
+  const totalPages = Math.ceil(filteredAnomalies.length / PAGE_SIZE) || 1;
+  currentPage = Math.max(1, Math.min(totalPages, currentPage + dir));
+  renderAnomalyTable();
+}
+
+// ====================== ROOT CAUSES ======================
+function renderRootCauses(causes) {
+  const container = document.getElementById('root-causes-list');
+  if (!causes.length) {
+    container.innerHTML = '<p class="text-navy-400 text-sm">No root causes identified.</p>';
+    return;
+  }
+  container.innerHTML = causes.map(c => {
+    const confColor = c.confidence >= 80 ? '#0D9488' : c.confidence >= 60 ? '#f59e0b' : '#6366f1';
+    return `
+      <div class="hover-card rounded-lg border border-navy-100 p-4">
+        <div class="flex items-start justify-between mb-2">
+          <span class="text-[10px] uppercase tracking-wider font-semibold text-teal-600 bg-teal-50 px-2 py-0.5 rounded">${escHtml(c.category || 'Pattern')}</span>
+          <span class="text-[11px] text-navy-400">${c.affectedCount || 0} affected</span>
+        </div>
+        <p class="text-sm text-navy-700 font-medium mb-3">${escHtml(c.cause)}</p>
+        <div class="flex items-center gap-2">
+          <div class="confidence-bar flex-1"><div class="confidence-fill" style="width:${c.confidence}%;background:${confColor}"></div></div>
+          <span class="text-[11px] font-mono text-navy-500">${c.confidence}%</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ====================== RECOMMENDATIONS ======================
+function renderRecommendations(recs) {
+  const container = document.getElementById('recommendations-list');
+  if (!recs.length) {
+    container.innerHTML = '<p class="text-navy-400 text-sm">No recommendations available.</p>';
+    return;
+  }
+  container.innerHTML = recs.map((r, i) => {
+    const prioClass = (r.priority || '').toLowerCase().includes('immediate') ? 'priority-immediate' :
+                      (r.priority || '').toLowerCase().includes('short') ? 'priority-short-term' : 'priority-medium-term';
+    const effClass = (r.effort || '').toLowerCase() === 'low' ? 'effort-low' :
+                     (r.effort || '').toLowerCase() === 'high' ? 'effort-high' : 'effort-medium';
+    return `
+      <div class="hover-card rounded-lg border border-navy-100 p-4">
+        <div class="flex items-start justify-between mb-2">
+          <div class="flex gap-2">
+            <span class="text-[10px] px-2 py-0.5 rounded font-semibold ${prioClass}">${escHtml(r.priority || 'Planned')}</span>
+            <span class="text-[10px] px-2 py-0.5 rounded font-medium ${effClass}">Effort: ${escHtml(r.effort || 'Medium')}</span>
+          </div>
+          <span class="text-navy-300 text-xs font-mono">#${i + 1}</span>
+        </div>
+        <p class="text-sm text-navy-700 font-medium mb-1">${escHtml(r.action)}</p>
+        <p class="text-xs text-navy-400">${escHtml(r.impact || '')}</p>
+      </div>
+    `;
+  }).join('');
+}
+
+// ====================== IMPACT SIMULATOR ======================
+function updateSlider(num) {
+  const slider = num === 1 ? document.getElementById('slider-followup') : document.getElementById('slider-tuition');
+  const label = document.getElementById(`slider${num}-val`);
+  label.textContent = `${slider.value}%`;
+}
+
+function runSimulation() {
+  if (!scanData) return;
+
+  const followup = parseInt(document.getElementById('slider-followup').value);
+  const tuition = parseInt(document.getElementById('slider-tuition').value);
+  const total = scanData.anomalies_detected || 0;
+  const critical = scanData.by_severity?.critical || 0;
+  const high = scanData.by_severity?.high || 0;
+  const medium = scanData.by_severity?.medium || 0;
+
+  // Model: counselor follow-up primarily reduces stage-drift (High), tuition plans reduce financial anomalies (Medium/Critical)
+  const highReduction = Math.round(high * (followup / 100) * 0.7);
+  const mediumReduction = Math.round(medium * (tuition / 100) * 0.5);
+  const criticalReduction = Math.round(critical * (tuition / 100) * 0.6);
+  const totalReduction = highReduction + mediumReduction + criticalReduction;
+  const newTotal = Math.max(0, total - totalReduction);
+  const improvement = total > 0 ? Math.round((totalReduction / total) * 100) : 0;
+
+  const resultsEl = document.getElementById('sim-results');
+  resultsEl.innerHTML = `
+    <div class="w-full space-y-4">
+      <div class="text-center mb-4">
+        <p class="text-[11px] uppercase tracking-wider text-navy-400 font-medium mb-1">Projected Improvement</p>
+        <p class="text-4xl font-display font-bold text-teal-600">${improvement}%</p>
+        <p class="text-xs text-navy-400 mt-1">reduction in anomalies</p>
+      </div>
+      <div class="grid grid-cols-3 gap-3 text-center">
+        <div class="bg-white rounded-lg p-3 border border-navy-100">
+          <p class="text-[10px] uppercase tracking-wider text-navy-400 mb-1">Current</p>
+          <p class="text-lg font-bold font-mono text-navy-900">${total}</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-navy-100">
+          <p class="text-[10px] uppercase tracking-wider text-navy-400 mb-1">Resolved</p>
+          <p class="text-lg font-bold font-mono text-teal-600">-${totalReduction}</p>
+        </div>
+        <div class="bg-white rounded-lg p-3 border border-navy-100">
+          <p class="text-[10px] uppercase tracking-wider text-navy-400 mb-1">Remaining</p>
+          <p class="text-lg font-bold font-mono text-navy-900">${newTotal}</p>
+        </div>
+      </div>
+      <div class="space-y-2 text-xs text-left">
+        <div class="flex justify-between items-center py-1.5 px-3 bg-white rounded border border-navy-100">
+          <span class="text-navy-500">Critical anomalies resolved</span>
+          <span class="font-mono font-semibold text-severity-critical">${criticalReduction} of ${critical}</span>
+        </div>
+        <div class="flex justify-between items-center py-1.5 px-3 bg-white rounded border border-navy-100">
+          <span class="text-navy-500">High anomalies resolved</span>
+          <span class="font-mono font-semibold text-severity-high">${highReduction} of ${high}</span>
+        </div>
+        <div class="flex justify-between items-center py-1.5 px-3 bg-white rounded border border-navy-100">
+          <span class="text-navy-500">Medium anomalies resolved</span>
+          <span class="font-mono font-semibold text-severity-medium">${mediumReduction} of ${medium}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ====================== UTILITIES ======================
+function escHtml(str) {
+  const d = document.createElement('div');
+  d.textContent = str || '';
+  return d.innerHTML;
+}
+
+// ====================== INIT ======================
+window.addEventListener('DOMContentLoaded', () => {
+  runScan();
+});
+</script>
+</body>
+</html>
