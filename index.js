@@ -7,6 +7,14 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 app.use(express.static('public'));
+
+// Allow iframe embedding
+app.use((req, res, next) => {
+  res.removeHeader('X-Frame-Options');
+  res.setHeader('Content-Security-Policy', "frame-ancestors *");
+  next();
+});
+
 // CORS — Allow Custom Menu Web / external UIs to call this
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
