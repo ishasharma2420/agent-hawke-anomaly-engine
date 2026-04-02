@@ -60,7 +60,7 @@ const HIGH_INTENT_SOURCES = [
   "Pay per Click Ads",
 ];
 
-const COUNSELOR_KEYWORDS = [
+const ADVISOR_KEYWORDS = [
   "Inbound Phone Call Activity",
   "Outbound Phone Call Activity",
   "Invorto Call Qualification",
@@ -352,20 +352,20 @@ async function detectCRMAnomalies(merged) {
     };
   }
 
-  // 2️⃣ APPLICATION COMPLETED – NO COUNSELOR FOLLOW UP
+  // 2️⃣ APPLICATION COMPLETED – NO ADVISOR FOLLOW-UP
   if (crmStage === "Application Completed" && daysInStage > 5) {
     const activities = await fetchActivities(merged.prospectId);
-    const hasCounselor = activities.some((a) => {
+    const hasAdvisor = activities.some((a) => {
       const eventName = a.EventName || "";
-      return COUNSELOR_KEYWORDS.some((kw) => eventName.includes(kw));
+      return ADVISOR_KEYWORDS.some((kw) => eventName.includes(kw));
     });
-    if (!hasCounselor) {
+    if (!hasAdvisor) {
       return {
-        type: "Application Completed – No Counselor Follow-up",
+        type: "Application Completed – No Advisor Follow-up",
         severity: "High",
         confidence: 88,
         source: "CRM",
-        explanation: `No counselor activity ${daysInStage} days after application completion.`,
+        explanation: `No advisor activity ${daysInStage} days after application completion.`,
       };
     }
   }
@@ -481,7 +481,7 @@ function detectSISAnomalies(merged) {
       severity: merged.academicStanding === "Suspension" ? "Critical" : "High",
       confidence: 85,
       source: "SIS",
-      explanation: `Student on ${merged.academicStanding} with ${merged.creditsEarned} credits earned.`,
+      explanation: `Student on ${merged.academicStanding} with ${merged.creditsEarned} credits earned. Elevated withdrawal and R2T4 return risk.`,
     };
   }
 
@@ -496,7 +496,27 @@ function detectSISAnomalies(merged) {
       severity: "High",
       confidence: 87,
       source: "SIS",
-      explanation: `Enrolled for ${merged.currentTerm} but 0 credits earned. May have stopped attending.`,
+      explanation: `Enrolled for ${merged.currentTerm} but 0 credits earned. May have stopped attending — R2T4 return risk.`,
+    };
+  }
+
+  // 🔟 ATTENDANCE RISK – POTENTIAL WITHDRAWAL
+  if (
+    merged.hasSIS &&
+    (merged.enrollmentStatus === "Active" || merged.enrollmentStatus === "Enrolled") &&
+    merged.academicStanding &&
+    merged.academicStanding !== "Good" &&
+    merged.creditsEarned !== null &&
+    merged.currentTerm
+  ) {
+    // Student is active but academic standing is not Good and credits are behind
+    const standingLabel = merged.academicStanding;
+    return {
+      type: "Attendance Risk – Potential Withdrawal",
+      severity: standingLabel === "Probation" ? "High" : "Critical",
+      confidence: 84,
+      source: "SIS",
+      explanation: `Active student with ${standingLabel} standing and ${merged.creditsEarned} credits earned in ${merged.currentTerm}. Attendance pattern suggests withdrawal risk — triggers R2T4 return exposure.`,
     };
   }
 
@@ -510,7 +530,15 @@ function detectSISAnomalies(merged) {
 async function analyzeWithOpenAI(anomalies, summary) {
   if (!OPENAI_API_KEY || anomalies.length === 0) return null;
 
-  const prompt = `You are Agent Hawke, an AI anomaly detection system for a university admissions CRM.
+  const prompt = `You are Agent Hawke, an AI anomaly detection system for a for-profit career school admissions CRM.
+
+IMPORTANT CONTEXT — Use this vocabulary and framing in ALL outputs:
+- The institution is a for-profit career school (vocational/trade programs: healthcare training, skilled trades, beauty/cosmetology, IT, automotive, culinary).
+- "Starts" are the primary revenue metric — a start is a student physically seated on day one of their cohort. The gap between enrolled and started is where revenue disappears.
+- Retention is the single largest revenue problem. When a student withdraws mid-program, the school must perform an R2T4 calculation and return Title IV financial aid to the federal government.
+- Attendance decline is the leading indicator of withdrawal, followed by GPA decline and missed financial aid disbursements.
+- Use "advisors" (never "counselors"). Use "starts" and "start rate" (not just "enrollments"). Use "program completion" (not "graduation" unless referring to a ceremony).
+- Cost-per-start, stitch-in (placing a student into a later cohort after missing their original start date), and cancellations are key operational terms.
 
 Here is today's scan summary:
 - Total students scanned: ${summary.totalScanned}
@@ -531,7 +559,7 @@ Respond ONLY with valid JSON (no markdown, no backticks). Use this exact structu
 {
   "rootCauses": [
     {
-      "cause": "Short description",
+      "cause": "Short description using career school terminology",
       "confidence": 78,
       "category": "Primary driver | Contributing factor | Minor factor",
       "affectedCount": 3
@@ -539,13 +567,13 @@ Respond ONLY with valid JSON (no markdown, no backticks). Use this exact structu
   ],
   "recommendations": [
     {
-      "action": "What to do",
-      "impact": "Expected outcome",
+      "action": "What to do — use advisor, start rate, and retention language",
+      "impact": "Expected outcome framed in starts, retention, or R2T4 risk reduction",
       "priority": "Immediate | This week | This month",
       "effort": "Low | Medium | High"
     }
   ],
-  "riskSummary": "One paragraph executive summary of the overall risk posture"
+  "riskSummary": "One paragraph executive summary of the overall risk posture, framed around start rate protection, retention risk, and R2T4 financial exposure"
 }`;
 
   try {
